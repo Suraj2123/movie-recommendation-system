@@ -1,4 +1,3 @@
-import os
 from fastapi.testclient import TestClient
 
 from mrs.serving.api import app
@@ -9,3 +8,4 @@ def test_health_endpoint():
     r = client.get("/health")
     assert r.status_code == 200
     assert "status" in r.json()
+
