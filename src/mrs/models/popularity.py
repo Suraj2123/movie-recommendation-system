@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-import numpy as np
 import pandas as pd
 
 from mrs.models.base import Rec
@@ -13,7 +11,7 @@ class PopularityRecommender:
     ranked: list[Rec]
 
     @classmethod
-    def train(cls, ratings: pd.DataFrame) -> "PopularityRecommender":
+    def train(cls, ratings: pd.DataFrame) -> PopularityRecommender:
         # Bayesian-ish shrinkage: mean + confidence via count
         grouped = ratings.groupby("movieId")["rating"].agg(["mean", "count"]).reset_index()
         global_mean = float(ratings["rating"].mean())
