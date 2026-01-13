@@ -1,12 +1,3 @@
-
-Commit message:
-- `docs: add README with quickstart`
-
----
-
-## 1.4 Add `MODEL_CARD.md`
-**Path:** `MODEL_CARD.md`
-```md
 # Model Card — Movie Recommendation System (MRS)
 
 ## Model overview
