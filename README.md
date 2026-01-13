@@ -9,7 +9,6 @@ Production-style movie recommender with:
 ## What’s implemented
 - **Popularity baseline** recommender
 - **Content-based** recommender (TF-IDF over genres + title, cosine similarity)
-- Train/eval pipeline that produces versioned artifacts under `artifacts/`
 - FastAPI endpoints:
   - `GET /health`
   - `GET /v1/model-info`
