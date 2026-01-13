@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from joblib import dump
-import pandas as pd
 
 from mrs.config.logging import configure_logging
 from mrs.config.settings import settings
@@ -16,6 +15,7 @@ from mrs.evaluation.offline_eval import chronological_split, evaluate
 from mrs.evaluation.report import render_report
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
+
 
 
 def _ensure_dir(p: Path) -> None:
