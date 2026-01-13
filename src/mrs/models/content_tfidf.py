@@ -24,13 +24,13 @@ class ContentTfidfModel:
         return (title + " " + genres).str.lower()
 
     @classmethod
-    def train(cls, movies: pd.DataFrame) -> "ContentTfidfModel":
+    def train(cls, movies: pd.DataFrame) -> ContentTfidfModel:
         text = cls._make_text(movies)
         vectorizer = TfidfVectorizer(min_df=2, max_features=30_000, ngram_range=(1, 2))
-        X = vectorizer.fit_transform(text)
-        X_dense = X.toarray().astype(np.float32)
+        x = vectorizer.fit_transform(text)
+        x_dense = x.toarray().astype(np.float32)
         movie_ids = movies["movieId"].to_numpy(dtype=np.int64)
-        return cls(movie_ids=movie_ids, tfidf_matrix=X_dense, vectorizer=vectorizer)
+        return cls(movie_ids=movie_ids, tfidf_matrix=x_dense, vectorizer=vectorizer)
 
     def similar_items(self, movie_id: int, k: int) -> list[Rec]:
         idx = np.where(self.movie_ids == movie_id)[0]
@@ -61,7 +61,7 @@ class ContentTfidfModel:
         )
 
     @classmethod
-    def load(cls, path: str) -> "ContentTfidfModel":
+    def load(cls, path: str) -> ContentTfidfModel:
         obj = load(path)
         return cls(
             movie_ids=obj["movie_ids"],
