@@ -20,7 +20,7 @@ def chronological_split(ratings: pd.DataFrame, test_ratio: float = 0.2) -> Split
     train_parts = []
     test_parts = []
 
-    for uid, grp in ratings.groupby("userId"):
+    for _uid, grp in ratings.groupby("userId"):
         n = len(grp)
         if n < 5:
             train_parts.append(grp)
