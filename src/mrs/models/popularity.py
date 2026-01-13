@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import pandas as pd
 
 from mrs.models.base import Rec
+
 
 
 @dataclass
