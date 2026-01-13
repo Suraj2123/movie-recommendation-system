@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 
 
+
 @dataclass(frozen=True)
 class EvalResult:
     precision_at_k: float
