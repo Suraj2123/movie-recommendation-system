@@ -42,7 +42,6 @@ def train(run_id: str) -> dict[str, Any]:
     content = ContentTfidfModel.train(data.movies)
     print("[train] content tfidf trained")
 
-    # Offline eval
     pop_eval = evaluate(popularity, split.train, split.test, k=10)
     print("[train] popularity evaluation done")
 
@@ -91,10 +90,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", default=settings.run_id)
     args = parser.parse_args()
-
     train(args.run_id)
 
 
 if __name__ == "__main__":
     main()
-
