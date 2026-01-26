@@ -1,6 +1,6 @@
-import os
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +11,7 @@ from mrs.config.logging import configure_logging
 from mrs.config.settings import settings
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
+
 
 Strategy = Literal["popularity", "content"]
 
