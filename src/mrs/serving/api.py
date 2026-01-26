@@ -86,6 +86,15 @@ def main() -> None:
 
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run("mrs.serving.api:app", host="0.0.0.0", port=port, reload=False)
+@app.get("/")
+def root() -> dict:
+    return {
+        "name": "Movie Recommendation System",
+        "docs": "/docs",
+        "health": "/health",
+        "example_recs": "/v1/recommendations?user_id=1&k=10&strategy=popularity",
+    }
+
 
 
 
