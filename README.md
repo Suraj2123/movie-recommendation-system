@@ -1,5 +1,11 @@
 # Movie Recommendation System (MRS)
+**Live Demo (Swagger UI):**  
+👉 https://movie-recommendation-system-oivj.onrender.com/docs  
 
+**Health Check:**  
+👉 https://movie-recommendation-system-oivj.onrender.com/health  
+
+---
 Production-style movie recommender with:
 - Offline training pipeline (baseline + content-based TF-IDF)
 - Offline evaluation + generated report
