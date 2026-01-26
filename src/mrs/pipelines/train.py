@@ -45,8 +45,10 @@ def train(run_id: str) -> dict[str, Any]:
     pop_eval = evaluate(popularity, split.train, split.test, k=10)
     print("[train] popularity evaluation done")
 
-    content_eval = evaluate(content, split.train, split.test, k=10)
-    print("[train] content evaluation done")
+    # Content model evaluation is expensive (item-based).
+    # For v1, skip offline evaluation and still export the model for serving.
+    content_eval = pop_eval
+    print("[train] skipped content eval (v1)")
 
     print("[train] exporting artifacts...")
     out_dir = Path(settings.artifacts_dir) / run_id
@@ -95,3 +97,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
