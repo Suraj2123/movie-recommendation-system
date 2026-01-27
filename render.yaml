@@ -1,6 +1,7 @@
 services:
+  # 1) FastAPI backend
   - type: web
-    name: movie-recommendation-system
+    name: movie-recommendation-api
     env: python
     plan: free
     buildCommand: |
@@ -9,3 +10,20 @@ services:
       python -m mrs.pipelines.train --run-id prod
     startCommand: |
       uvicorn mrs.serving.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: RUN_ID
+        value: prod
+
+  # 2) Streamlit UI (playground)
+  - type: web
+    name: movie-recommendation-ui
+    env: python
+    plan: free
+    buildCommand: |
+      pip install -U pip
+      pip install -r app/requirements.txt
+    startCommand: |
+      streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port $PORT
+    envVars:
+      - key: API_BASE_URL
+        value: https://movie-recommendation-api.onrender.com
