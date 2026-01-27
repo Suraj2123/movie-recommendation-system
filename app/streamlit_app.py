@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 import time
 
-import requests
 import streamlit as st
+import requests
+
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
