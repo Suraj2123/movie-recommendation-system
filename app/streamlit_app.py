@@ -1,97 +1,105 @@
-import os
-import time
+from __future__ import annotations
 
-import requests
-import streamlit as st
+from typing import Literal
 
-API_BASE_URL = os.getenv(
-    "API_BASE_URL",
-    "https://movie-recommendation-system-oivj.onrender.com",
-).rstrip("/")
+from fastapi import FastAPI, HTTPException, Query
 
-
-def call_api(path: str, params: dict | None = None, timeout: int = 30, retries: int = 2):
-    url = f"{API_BASE_URL}{path}"
-
-    last_exc: Exception | None = None
-    for attempt in range(retries + 1):
-        try:
-            r = requests.get(url, params=params, timeout=timeout, allow_redirects=True)
-        except Exception as e:
-            last_exc = e
-            continue
-
-        st.caption(f"GET {r.url}")
-        st.write("Status:", r.status_code)
-        st.write("Content-Type:", r.headers.get("content-type", "(missing)"))
-
-        # Retry on typical transient Render/proxy errors
-        if r.status_code in (502, 503, 504) and attempt < retries:
-            time.sleep(1)
-            continue
-
-        # Try JSON first
-        try:
-            return r.json()
-        except Exception:
-            # Not JSON: show raw body so we can see what's happening
-            body = (r.text or "").strip()
-            if not body:
-                st.warning("Empty response body (not JSON).")
-            else:
-                st.code(body[:3000])
-            return None
-
-    st.error(f"Network error calling {url}: {last_exc}")
-    return None
+from mrs.config.settings import settings
+from mrs.models.content_tfidf import ContentTfidfModel
+from mrs.models.popularity import PopularityRecommender
+from mrs.serving.loader import load_models
 
 
-st.set_page_config(page_title="Movie Recommendation System", page_icon="🎬", layout="centered")
-st.title("🎬 Movie Recommendation System")
-st.caption("Interactive playground powered by your FastAPI backend.")
+# -----------------------------------------------------------------------------
+# App setup
+# -----------------------------------------------------------------------------
 
-with st.sidebar:
-    st.header("Backend")
-    st.write("API Base URL:")
-    st.code(API_BASE_URL)
+app = FastAPI(
+    title="Movie Recommendation System API",
+    description="FastAPI backend for movie recommendations",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
 
-tab1, tab2 = st.tabs(["👤 Recommend for user", "🎞️ Similar movies"])
+Strategy = Literal["popularity", "content"]
 
-with tab1:
-    st.subheader("Get recommendations")
-    user_id = st.number_input("user_id", min_value=1, value=1, step=1)
-    k = st.slider("k", min_value=1, max_value=50, value=10, step=1)
-    strategy = st.selectbox("strategy", ["popularity", "content"], index=0)
+# -----------------------------------------------------------------------------
+# Load models at startup
+# -----------------------------------------------------------------------------
 
-    if st.button("Get recommendations", type="primary"):
-        data = call_api(
-            "/v1/recommendations",
-            params={"user_id": int(user_id), "k": int(k), "strategy": strategy},
-            timeout=30,
-            retries=2,
-        )
-        if data is not None:
-            st.success("Done!")
-            st.json(data)
+popularity_model: PopularityRecommender | None = None
+content_model: ContentTfidfModel | None = None
 
-with tab2:
-    st.subheader("Find similar movies")
-    movie_id = st.number_input("movie_id", min_value=1, value=1, step=1)
-    k2 = st.slider("k (similar)", min_value=1, max_value=50, value=10, step=1)
 
-    if st.button("Find similar", type="primary"):
-        data = call_api(
-            "/v1/similar-items",
-            params={"movie_id": int(movie_id), "k": int(k2)},
-            timeout=30,
-            retries=2,
-        )
-        if data is not None:
-            st.success("Done!")
-            st.json(data)
+@app.on_event("startup")
+def startup_event():
+    global popularity_model, content_model
 
-st.divider()
-st.subheader("Health")
-health = call_api("/health", timeout=15, retries=2)
-if health is not None:
-    st.json(health)
+    try:
+        popularity_model, content_model, _ = load_models(settings.run_id)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load models: {e}") from e
+
+
+# -----------------------------------------------------------------------------
+# Health
+# -----------------------------------------------------------------------------
+
+@app.get("/health", tags=["health"])
+def health():
+    return {
+        "status": "ok",
+        "run_id": settings.run_id,
+        "models_loaded": popularity_model is not None,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Recommendations
+# -----------------------------------------------------------------------------
+
+@app.get("/v1/recommendations", tags=["recommendations"])
+def get_recommendations(
+    user_id: int = Query(..., ge=1),
+    k: int = Query(10, ge=1, le=100),
+    strategy: Strategy = Query("popularity"),
+):
+    if popularity_model is None or content_model is None:
+        raise HTTPException(status_code=503, detail="Models not loaded")
+
+    if strategy == "popularity":
+        recs = popularity_model.recommend(user_id=user_id, k=k)
+    elif strategy == "content":
+        recs = content_model.recommend_for_user(user_id=user_id, k=k)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid strategy")
+
+    return {
+        "user_id": user_id,
+        "strategy": strategy,
+        "k": k,
+        "recommendations": recs,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Similar items
+# -----------------------------------------------------------------------------
+
+@app.get("/v1/similar-items", tags=["recommendations"])
+def get_similar_items(
+    movie_id: int = Query(..., ge=1),
+    k: int = Query(10, ge=1, le=100),
+):
+    if content_model is None:
+        raise HTTPException(status_code=503, detail="Content model not loaded")
+
+    sims = content_model.similar_items(movie_id=movie_id, k=k)
+
+    return {
+        "movie_id": movie_id,
+        "k": k,
+        "similar_items": sims,
+    }
