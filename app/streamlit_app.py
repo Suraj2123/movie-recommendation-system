@@ -1,10 +1,11 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 import os
 import time
 
-import streamlit as st
 import requests
+import streamlit as st
 
 
 
