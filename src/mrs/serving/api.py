@@ -12,7 +12,6 @@ from mrs.config.settings import settings
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
 
-
 Strategy = Literal["popularity", "content"]
 
 
@@ -26,7 +25,7 @@ def load_models(run_id: str) -> tuple[PopularityRecommender, ContentTfidfModel, 
     content = ContentTfidfModel.load(str(models_dir / "content_tfidf.joblib"))
 
     metrics_path = base / "metrics.json"
-    metrics = {}
+    metrics: dict = {}
     if metrics_path.exists():
         metrics = __import__("json").loads(metrics_path.read_text())
 
@@ -36,11 +35,20 @@ def load_models(run_id: str) -> tuple[PopularityRecommender, ContentTfidfModel, 
 configure_logging()
 app = FastAPI(title="Movie Recommendation System", version="0.1.0")
 
-# Load at startup (simple)
 try:
     POP, CONTENT, METRICS = load_models(settings.run_id)
 except Exception:
     POP, CONTENT, METRICS = None, None, {}
+
+
+@app.get("/")
+def root() -> dict:
+    return {
+        "name": "Movie Recommendation System",
+        "docs": "/docs",
+        "health": "/health",
+        "example_recs": "/v1/recommendations?user_id=1&k=10&strategy=popularity",
+    }
 
 
 @app.get("/health")
@@ -50,11 +58,7 @@ def health() -> dict:
 
 @app.get("/v1/model-info")
 def model_info() -> dict:
-    return {
-        "run_id": settings.run_id,
-        "version": "0.1.0",
-        "metrics": METRICS,
-    }
+    return {"run_id": settings.run_id, "version": "0.1.0", "metrics": METRICS}
 
 
 @app.get("/v1/recommendations")
@@ -72,10 +76,7 @@ def recommendations(
 
 
 @app.get("/v1/similar-items")
-def similar_items(
-    movie_id: int = Query(..., ge=1),
-    k: int = Query(10, ge=1, le=100),
-) -> dict:
+def similar_items(movie_id: int = Query(..., ge=1), k: int = Query(10, ge=1, le=100)) -> dict:
     if CONTENT is None:
         raise HTTPException(status_code=400, detail="Models not loaded. Train first.")
     recs = CONTENT.similar_items(movie_id=movie_id, k=k)
@@ -87,18 +88,6 @@ def main() -> None:
 
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run("mrs.serving.api:app", host="0.0.0.0", port=port, reload=False)
-
-
-@app.get("/")
-def root() -> dict:
-    return {
-        "name": "Movie Recommendation System",
-        "docs": "/docs",
-        "health": "/health",
-        "example_recs": "/v1/recommendations?user_id=1&k=10&strategy=popularity",
-    }
-
-
 
 
 if __name__ == "__main__":
