@@ -1,2 +1,5 @@
 streamlit>=1.30
 requests>=2.31
+requests>=2.31
+streamlit>=1.30
+uvicorn>=0.24
