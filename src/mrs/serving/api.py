@@ -162,18 +162,33 @@ def similar_items(
     if CONTENT_MODEL is None:
         raise HTTPException(status_code=400, detail="Content model is not available.")
 
-    raw = (
-        CONTENT_MODEL.similar_items(movie_id=movie_id, k=k)
-        if hasattr(CONTENT_MODEL, "similar_items")
-        else CONTENT_MODEL.most_similar(movie_id=movie_id, k=k)  # type: ignore[attr-defined]
-    )
+    # Try common method names safely
+    try:
+        if hasattr(CONTENT_MODEL, "similar_items"):
+            raw = CONTENT_MODEL.similar_items(movie_id=movie_id, k=k)
+        elif hasattr(CONTENT_MODEL, "similar_movies"):
+            raw = CONTENT_MODEL.similar_movies(movie_id=movie_id, k=k)
+        elif hasattr(CONTENT_MODEL, "most_similar"):
+            raw = CONTENT_MODEL.most_similar(movie_id=movie_id, k=k)
+        elif hasattr(CONTENT_MODEL, "recommend_similar"):
+            raw = CONTENT_MODEL.recommend_similar(movie_id=movie_id, k=k)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Content model does not implement a similar-items method.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Important: return JSON error instead of crashing (prevents 502)
+        raise HTTPException(status_code=500, detail=f"similar-items failed: {type(e).__name__}: {e}")
 
     items = _normalize_list(raw, "similar_items")
     out_items: list[dict[str, Any]] = []
 
     for item in items:
         if isinstance(item, dict):
-            mid = int(item.get("movie_id") or item.get("movieId"))
+            mid = int(item.get("movie_id") or item.get("movieId") or item.get("id") or item.get("item"))
             score = item.get("score")
         else:
             mid = int(item[0])
