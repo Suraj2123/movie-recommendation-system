@@ -1,183 +1,262 @@
 # ruff: noqa: I001
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any, Literal
+import os
+import time
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from joblib import load
-
-from mrs.config.settings import settings
-from mrs.models.content_tfidf import ContentTfidfModel
-from mrs.models.popularity import PopularityRecommender
-from mrs.serving.movies_lookup import load_movies_lookup
-
-Strategy = Literal["popularity", "content"]
-
-POP_MODEL: PopularityRecommender | None = None
-CONTENT_MODEL: ContentTfidfModel | None = None
-MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
-MODELS_LOADED = False
+import pandas as pd
+import requests
+import streamlit as st
 
 
-def _ensure_loaded() -> None:
-    if not MODELS_LOADED or POP_MODEL is None:
-        raise HTTPException(status_code=503, detail="Models not loaded. Train first.")
+APP_TITLE = "🎬 Movie Recommendation System"
+API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
 
 
-def _models_dir() -> Path:
-    return Path(settings.artifacts_dir) / settings.run_id / "models"
+def _stop_with_error(msg: str) -> None:
+    st.error(msg)
+    st.stop()
 
 
-def _enrich(movie_id: int) -> dict[str, str | None]:
-    meta = MOVIES_LOOKUP.get(movie_id, {})
-    return {"title": meta.get("title"), "genres": meta.get("genres")}
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global CONTENT_MODEL, MODELS_LOADED, MOVIES_LOOKUP, POP_MODEL
-
-    MODELS_LOADED = False
-    POP_MODEL = None
-    CONTENT_MODEL = None
-    MOVIES_LOOKUP = {}
-
-    # Load movie titles/genres if available 
-    try:
-        MOVIES_LOOKUP = load_movies_lookup(settings.data_dir)
-    except Exception:
-        MOVIES_LOOKUP = {}
-
-    # Load models from artifacts
-    try:
-        models_dir = _models_dir()
-        pop_path = models_dir / "popularity.joblib"
-        content_path = models_dir / "content_tfidf.joblib"
-
-        if not pop_path.exists():
-            MODELS_LOADED = False
-            yield
-            return
-
-        POP_MODEL = load(pop_path)
-
-        if content_path.exists():
-            CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
-        else:
-            CONTENT_MODEL = None
-
-        MODELS_LOADED = True
-    except Exception:
-        MODELS_LOADED = False
-
-    yield
-
-
-app = FastAPI(
-    title="Movie Recommendation System",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-    lifespan=lifespan,
-)
-
-
-@app.get("/")
-def root():
-    return {
-        "name": "Movie Recommendation System",
-        "docs": "/docs",
-        "health": "/health",
-        "example_recs": "/v1/recommendations?user_id=1&k=10&strategy=popularity",
-    }
-
-
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "run_id": settings.run_id,
-        "models_loaded": bool(MODELS_LOADED and POP_MODEL is not None),
-    }
-
-
-@app.get("/v1/recommendations")
-def recommendations(
-    user_id: int = Query(..., ge=1),
-    k: int = Query(10, ge=1, le=50),
-    strategy: Strategy = Query("popularity"),
+def call_api(
+    path: str,
+    params: dict[str, Any] | None = None,
+    retries: int = 6,
+    timeout: int = 45,
 ):
-    _ensure_loaded()
+    """
+    Render free-tier can cold-start. This function retries with small backoff
+    and returns (json, err_string).
+    """
+    url = f"{API_BASE_URL}{path}"
+    last_err: str | None = None
 
-    if strategy == "popularity":
-        # Popularity recommender often ignores user_id; keep signature stable anyway.
-        raw = POP_MODEL.recommend(user_id=user_id, k=k) if hasattr(POP_MODEL, "recommend") else POP_MODEL.top_k(k)  # type: ignore[attr-defined]
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+
+            # If Render proxy returns HTML error pages on startup (502/503),
+            # treat as retryable for a bit.
+            if r.status_code in (502, 503, 504) and attempt < retries:
+                time.sleep(1.0 + attempt * 0.5)
+                continue
+
+            if r.status_code >= 400:
+                text = (r.text or "").strip()
+                return None, f"{r.status_code} {r.reason}: {text[:500]}"
+
+            try:
+                return r.json(), None
+            except Exception:
+                ct = r.headers.get("content-type", "(missing)")
+                text = (r.text or "").strip()
+                return None, f"Expected JSON but got {ct}. Body: {text[:500]}"
+
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retries:
+                time.sleep(1.0 + attempt * 0.5)
+                continue
+            return None, f"Network error calling {url}: {last_err}"
+
+    return None, f"Unknown error calling {url}: {last_err}"
+
+
+def as_df(payload: Any) -> pd.DataFrame:
+    if payload is None:
+        return pd.DataFrame()
+
+    if isinstance(payload, dict):
+        for k in ("recommendations", "similar_items", "items", "results"):
+            if k in payload and isinstance(payload[k], list):
+                payload = payload[k]
+                break
+
+    if isinstance(payload, list):
+        if not payload:
+            return pd.DataFrame()
+        if all(isinstance(x, dict) for x in payload):
+            return pd.DataFrame(payload)
+        return pd.DataFrame({"item": payload})
+
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+
+    return pd.DataFrame({"value": [payload]})
+
+
+def ensure_rank(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if "rank" not in df.columns:
+        df.insert(0, "rank", range(1, len(df) + 1))
+    return df
+
+
+def pick_title(row: dict[str, Any]) -> str:
+    for key in ("title", "name", "movie_title", "movie", "item"):
+        v = row.get(key)
+        if v is not None and str(v).strip():
+            return str(v)
+    if "movie_id" in row:
+        return f"Movie {row['movie_id']}"
+    return "Recommendation"
+
+
+def pick_subtitle(row: dict[str, Any]) -> str | None:
+    genres = row.get("genres")
+    if genres is not None and str(genres).strip():
+        return str(genres)
+    return None
+
+
+def pick_score(row: dict[str, Any]) -> str | None:
+    for key in ("score", "similarity", "rating", "pred", "pred_rating"):
+        if key in row and row[key] is not None:
+            try:
+                return f"{float(row[key]):.3f}"
+            except Exception:
+                return str(row[key])
+    return None
+
+
+# -------------------- UI --------------------
+st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="wide")
+
+if not API_BASE_URL:
+    _stop_with_error("API_BASE_URL is not set. Configure it in Render → movie-recommendation-ui → Environment.")
+
+st.title(APP_TITLE)
+st.caption("A live, interactive demo backed by a FastAPI recommender. Render free-tier may cold-start; the app will retry automatically.")
+
+with st.sidebar:
+    st.subheader("Backend")
+    st.code(API_BASE_URL)
+    st.link_button("Open API Docs (/docs)", f"{API_BASE_URL}/docs")
+
+    st.divider()
+    st.subheader("Recommendations")
+    user_id = st.number_input("User ID", min_value=1, value=1, step=1)
+    k = st.slider("Recommendations (k)", min_value=1, max_value=50, value=10, step=1)
+    strategy = st.selectbox("Strategy", ["popularity", "content"], index=0)
+
+    st.divider()
+    st.subheader("Similar movies")
+    movie_id = st.number_input("Movie ID", min_value=1, value=318, step=1)
+    k_sim = st.slider("Similar movies (k)", min_value=1, max_value=50, value=10, step=1)
+
+    st.divider()
+    st.subheader("Quick examples")
+    ex1, ex2, ex3 = st.columns(3)
+    if ex1.button("User 1", use_container_width=True):
+        st.session_state["demo_user_id"] = 1
+    if ex2.button("User 5", use_container_width=True):
+        st.session_state["demo_user_id"] = 5
+    if ex3.button("User 10", use_container_width=True):
+        st.session_state["demo_user_id"] = 10
+
+if "demo_user_id" in st.session_state:
+    user_id = int(st.session_state.pop("demo_user_id"))
+
+health_col, info_col = st.columns([1, 2], gap="large")
+
+with health_col:
+    st.subheader("✅ Backend health")
+    with st.spinner("Checking backend..."):
+        health, health_err = call_api("/health", timeout=20)
+
+    if health_err:
+        st.warning("Backend may be waking up. Try again in a few seconds.")
+        st.caption(health_err)
     else:
-        if CONTENT_MODEL is None:
-            raise HTTPException(status_code=400, detail="Content model is not available.")
-        raw = (
-            CONTENT_MODEL.recommend_for_user(user_id=user_id, k=k)
-            if hasattr(CONTENT_MODEL, "recommend_for_user")
-            else CONTENT_MODEL.recommend(user_id=user_id, k=k)  # type: ignore[attr-defined]
-        )
+        loaded = isinstance(health, dict) and health.get("models_loaded") is True
+        if loaded:
+            st.success("Healthy • Models loaded")
+        else:
+            st.warning("Healthy • Models not loaded yet")
+        st.json(health)
 
-    # Normalize output into list[{"movie_id": int, "score": float}]
-    recs: list[dict[str, Any]] = []
-    if isinstance(raw, dict) and "recommendations" in raw:
-        raw = raw["recommendations"]
-
-    if isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, dict):
-                movie_id = int(item["movie_id"])
-                score = float(item.get("score")) if item.get("score") is not None else None
-            else:
-                # tuple/list like (movie_id, score)
-                movie_id = int(item[0])
-                score = float(item[1]) if len(item) > 1 and item[1] is not None else None
-
-            out = {"movie_id": movie_id, **_enrich(movie_id)}
-            if score is not None:
-                out["score"] = score
-            recs.append(out)
-
-    return {"user_id": user_id, "k": k, "strategy": strategy, "recommendations": recs}
-
-
-@app.get("/v1/similar-items")
-def similar_items(
-    movie_id: int = Query(..., ge=1),
-    k: int = Query(10, ge=1, le=50),
-):
-    _ensure_loaded()
-    if CONTENT_MODEL is None:
-        raise HTTPException(status_code=400, detail="Content model is not available.")
-
-    raw = (
-        CONTENT_MODEL.similar_items(movie_id=movie_id, k=k)
-        if hasattr(CONTENT_MODEL, "similar_items")
-        else CONTENT_MODEL.most_similar(movie_id=movie_id, k=k)  # type: ignore[attr-defined]
+with info_col:
+    st.subheader("What to try")
+    st.markdown(
+        """
+- Start with **Popularity** for a quick “Top movies” style list.
+- Try **Content** to get recommendations based on movie similarity features.
+- Use **Similar movies** with movie `318` (Shawshank) to see related titles.
+        """.strip()
     )
 
-    recs: list[dict[str, Any]] = []
-    if isinstance(raw, dict) and "similar_items" in raw:
-        raw = raw["similar_items"]
+st.divider()
 
-    if isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, dict):
-                mid = int(item["movie_id"])
-                score = float(item.get("score")) if item.get("score") is not None else None
+tab_recs, tab_sim = st.tabs(["👤 Recommendations", "🎞️ Similar movies"])
+
+with tab_recs:
+    st.subheader("Recommendations")
+    run = st.button("Get recommendations", type="primary", use_container_width=True)
+
+    if run:
+        with st.spinner("Fetching recommendations (may take ~30–60s on cold start)..."):
+            data, err = call_api(
+                "/v1/recommendations",
+                params={"user_id": int(user_id), "k": int(k), "strategy": strategy},
+            )
+
+        if err:
+            st.error(err)
+        else:
+            df = ensure_rank(as_df(data))
+            recs = df.to_dict(orient="records") if not df.empty else []
+
+            if not recs:
+                st.warning("No recommendations returned.")
             else:
-                mid = int(item[0])
-                score = float(item[1]) if len(item) > 1 and item[1] is not None else None
+                st.success("Done.")
 
-            out = {"movie_id": mid, **_enrich(mid)}
-            if score is not None:
-                out["score"] = score
-            recs.append(out)
+                st.markdown("### ⭐ Top picks")
+                for row in recs[:5]:
+                    title = pick_title(row)
+                    subtitle = pick_subtitle(row)
+                    score = pick_score(row)
 
-    return {"movie_id": movie_id, "k": k, "similar_items": recs}
+                    card_left, card_right = st.columns([5, 1], gap="small")
+                    with card_left:
+                        st.markdown(f"**#{row.get('rank', '')} — {title}**")
+                        if subtitle:
+                            st.caption(subtitle)
+                    with card_right:
+                        if score:
+                            st.markdown(f"`{score}`")
+
+                st.markdown("### 📋 Full list")
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+            with st.expander("Raw JSON"):
+                st.json(data)
+
+with tab_sim:
+    st.subheader("Similar movies")
+    run2 = st.button("Find similar", type="primary", use_container_width=True)
+
+    if run2:
+        with st.spinner("Fetching similar movies (may take ~30–60s on cold start)..."):
+            data, err = call_api(
+                "/v1/similar-items",
+                params={"movie_id": int(movie_id), "k": int(k_sim)},
+            )
+
+        if err:
+            st.error(err)
+        else:
+            df = ensure_rank(as_df(data))
+            if df.empty:
+                st.warning("No similar movies returned.")
+            else:
+                st.success("Done.")
+
+                st.markdown("### 🎞️ Results")
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+            with st.expander("Raw JSON"):
+                st.json(data)
+
