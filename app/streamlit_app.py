@@ -88,9 +88,9 @@ with st.sidebar:
     movie_id = st.number_input("Movie ID", min_value=1, value=1, step=1)
     k_sim = st.slider("How many similar?", 1, 50, 10)
 
-colA, colB = st.columns([1, 1], gap="large")
+col_a, col_b = st.columns([1, 1], gap="large")
 
-with colA:
+with col_a:
     st.subheader("✅ Health")
     health, err = call_api("/health", timeout=15)
     if err:
@@ -102,7 +102,7 @@ with colA:
             st.warning("Backend reachable, but model status is unclear.")
         st.json(health)
 
-with colB:
+with col_b:
     st.subheader("📚 API docs")
     st.write("Open the backend docs here:")
     st.link_button("Open Swagger (/docs)", f"{API_BASE_URL}/docs")
