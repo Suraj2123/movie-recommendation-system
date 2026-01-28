@@ -180,8 +180,11 @@ def similar_items(
     except HTTPException:
         raise
     except Exception as e:
-        # Important: return JSON error instead of crashing (prevents 502)
-        raise HTTPException(status_code=500, detail=f"similar-items failed: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"similar-items failed: {type(e).__name__}: {e}",
+        ) from e
+
 
     items = _normalize_list(raw, "similar_items")
     out_items: list[dict[str, Any]] = []
