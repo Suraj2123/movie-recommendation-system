@@ -10,36 +10,55 @@ import requests
 import streamlit as st
 
 
-API_BASE_URL_RAW = os.getenv("API_BASE_URL", "")
+APP_TITLE = "🎬 Movie Recommendation System"
+API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
 
 
-def _error_banner(msg: str) -> None:
+def _stop_with_error(msg: str) -> None:
     st.error(msg)
     st.stop()
 
 
-def call_api(path: str, params: dict[str, Any] | None = None, retries: int = 2, timeout: int = 25):
+def call_api(
+    path: str,
+    params: dict[str, Any] | None = None,
+    retries: int = 6,
+    timeout: int = 45,
+):
+    """
+    Render free-tier can cold-start. This function retries with small backoff
+    and returns (json, err_string).
+    """
     url = f"{API_BASE_URL}{path}"
     last_err: str | None = None
 
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, params=params, timeout=timeout)
+
+            # If Render proxy returns HTML error pages on startup (502/503),
+            # treat as retryable for a bit.
+            if r.status_code in (502, 503, 504) and attempt < retries:
+                time.sleep(1.0 + attempt * 0.5)
+                continue
+
             if r.status_code >= 400:
                 text = (r.text or "").strip()
                 return None, f"{r.status_code} {r.reason}: {text[:500]}"
+
             try:
                 return r.json(), None
             except Exception:
                 ct = r.headers.get("content-type", "(missing)")
                 text = (r.text or "").strip()
                 return None, f"Expected JSON but got {ct}. Body: {text[:500]}"
+
         except Exception as e:
             last_err = str(e)
             if attempt < retries:
-                time.sleep(1)
-            else:
-                return None, f"Network error calling {url}: {last_err}"
+                time.sleep(1.0 + attempt * 0.5)
+                continue
+            return None, f"Network error calling {url}: {last_err}"
 
     return None, f"Unknown error calling {url}: {last_err}"
 
@@ -77,34 +96,39 @@ def ensure_rank(df: pd.DataFrame) -> pd.DataFrame:
 
 def pick_title(row: dict[str, Any]) -> str:
     for key in ("title", "name", "movie_title", "movie", "item"):
-        val = row.get(key)
-        if val is not None and str(val).strip():
-            return str(val)
+        v = row.get(key)
+        if v is not None and str(v).strip():
+            return str(v)
     if "movie_id" in row:
         return f"Movie {row['movie_id']}"
     return "Recommendation"
 
 
-def pick_score(row: dict[str, Any]) -> str | None:
-    for key in ("score", "similarity", "rating", "pred", "pred_rating"):
-        if key in row and row[key] is not None:
-            return str(row[key])
+def pick_subtitle(row: dict[str, Any]) -> str | None:
+    genres = row.get("genres")
+    if genres is not None and str(genres).strip():
+        return str(genres)
     return None
 
 
-st.set_page_config(page_title="🎬 Movie Recommendation System", page_icon="🎬", layout="wide")
+def pick_score(row: dict[str, Any]) -> str | None:
+    for key in ("score", "similarity", "rating", "pred", "pred_rating"):
+        if key in row and row[key] is not None:
+            try:
+                return f"{float(row[key]):.3f}"
+            except Exception:
+                return str(row[key])
+    return None
 
-# ---- DEBUG: show env var exactly (repr reveals hidden whitespace/newlines) ----
-st.write("API_BASE_URL raw repr:", repr(API_BASE_URL_RAW))
 
-API_BASE_URL = API_BASE_URL_RAW.strip().rstrip("/")
-st.write("API_BASE_URL cleaned repr:", repr(API_BASE_URL))
+# -------------------- UI --------------------
+st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="wide")
 
 if not API_BASE_URL:
-    _error_banner("API_BASE_URL is not set. Configure it in Render → movie-recommendation-ui → Environment.")
+    _stop_with_error("API_BASE_URL is not set. Configure it in Render → movie-recommendation-ui → Environment.")
 
-st.title("🎬 Movie Recommendation System")
-st.caption("A live, interactive demo backed by a FastAPI recommender.")
+st.title(APP_TITLE)
+st.caption("A live, interactive demo backed by a FastAPI recommender. Render free-tier may cold-start; the app will retry automatically.")
 
 with st.sidebar:
     st.subheader("Backend")
@@ -119,32 +143,47 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Similar movies")
-    movie_id = st.number_input("Movie ID", min_value=1, value=1, step=1)
+    movie_id = st.number_input("Movie ID", min_value=1, value=318, step=1)
     k_sim = st.slider("Similar movies (k)", min_value=1, max_value=50, value=10, step=1)
+
+    st.divider()
+    st.subheader("Quick examples")
+    ex1, ex2, ex3 = st.columns(3)
+    if ex1.button("User 1", use_container_width=True):
+        st.session_state["demo_user_id"] = 1
+    if ex2.button("User 5", use_container_width=True):
+        st.session_state["demo_user_id"] = 5
+    if ex3.button("User 10", use_container_width=True):
+        st.session_state["demo_user_id"] = 10
+
+if "demo_user_id" in st.session_state:
+    user_id = int(st.session_state.pop("demo_user_id"))
 
 health_col, info_col = st.columns([1, 2], gap="large")
 
 with health_col:
     st.subheader("✅ Backend health")
-    health, health_err = call_api("/health", timeout=15)
-    st.write("Health err:", health_err)
-    if health is not None:
-        st.json(health)
-    else:
-        st.json({})
+    with st.spinner("Checking backend..."):
+        health, health_err = call_api("/health", timeout=20)
 
-    if not health_err and isinstance(health, dict):
-        if health.get("models_loaded") is True:
+    if health_err:
+        st.warning("Backend may be waking up. Try again in a few seconds.")
+        st.caption(health_err)
+    else:
+        loaded = isinstance(health, dict) and health.get("models_loaded") is True
+        if loaded:
             st.success("Healthy • Models loaded")
         else:
-            st.warning("Healthy • Models NOT loaded (or unknown)")
+            st.warning("Healthy • Models not loaded yet")
+        st.json(health)
 
 with info_col:
-    st.subheader("How to use this demo")
+    st.subheader("What to try")
     st.markdown(
         """
-- **Recommendations:** choose a **User ID**, strategy, and **k**.
-- **Similar movies:** enter a **Movie ID** and **k**.
+- Start with **Popularity** for a quick “Top movies” style list.
+- Try **Content** to get recommendations based on movie similarity features.
+- Use **Similar movies** with movie `318` (Shawshank) to see related titles.
         """.strip()
     )
 
@@ -157,32 +196,36 @@ with tab_recs:
     run = st.button("Get recommendations", type="primary", use_container_width=True)
 
     if run:
-        with st.spinner("Fetching recommendations..."):
+        with st.spinner("Fetching recommendations (may take ~30–60s on cold start)..."):
             data, err = call_api(
                 "/v1/recommendations",
                 params={"user_id": int(user_id), "k": int(k), "strategy": strategy},
-                timeout=30,
             )
 
         if err:
             st.error(err)
         else:
             df = ensure_rank(as_df(data))
-            if df.empty:
+            recs = df.to_dict(orient="records") if not df.empty else []
+
+            if not recs:
                 st.warning("No recommendations returned.")
             else:
                 st.success("Done.")
 
                 st.markdown("### ⭐ Top picks")
-                top = df.head(5).to_dict(orient="records")
-                for row in top:
+                for row in recs[:5]:
                     title = pick_title(row)
+                    subtitle = pick_subtitle(row)
                     score = pick_score(row)
-                    left, right = st.columns([4, 1], gap="small")
-                    with left:
+
+                    card_left, card_right = st.columns([5, 1], gap="small")
+                    with card_left:
                         st.markdown(f"**#{row.get('rank', '')} — {title}**")
-                    with right:
-                        if score is not None:
+                        if subtitle:
+                            st.caption(subtitle)
+                    with card_right:
+                        if score:
                             st.markdown(f"`{score}`")
 
                 st.markdown("### 📋 Full list")
@@ -196,11 +239,10 @@ with tab_sim:
     run2 = st.button("Find similar", type="primary", use_container_width=True)
 
     if run2:
-        with st.spinner("Fetching similar movies..."):
+        with st.spinner("Fetching similar movies (may take ~30–60s on cold start)..."):
             data, err = call_api(
                 "/v1/similar-items",
                 params={"movie_id": int(movie_id), "k": int(k_sim)},
-                timeout=30,
             )
 
         if err:
@@ -211,6 +253,8 @@ with tab_sim:
                 st.warning("No similar movies returned.")
             else:
                 st.success("Done.")
+
+                st.markdown("### 🎞️ Results")
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
             with st.expander("Raw JSON"):
