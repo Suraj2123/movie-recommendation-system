@@ -1,107 +1,45 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from joblib import load
 
 from mrs.config.settings import settings
-from mrs.serving.loader import load_models
+from mrs.models.content_tfidf import ContentTfidfModel
+from mrs.models.popularity import PopularityRecommender
 from mrs.serving.movies_lookup import load_movies_lookup
 
 Strategy = Literal["popularity", "content"]
 
-POP_MODEL: Any | None = None
-CONTENT_MODEL: Any | None = None
+POP_MODEL: PopularityRecommender | None = None
+CONTENT_MODEL: ContentTfidfModel | None = None
 MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
 MODELS_LOADED = False
 
 
-def _enrich_movie(movie_id: int) -> dict[str, str | None]:
+def _models_dir() -> Path:
+    return Path(settings.artifacts_dir) / settings.run_id / "models"
+
+
+def _enrich(movie_id: int) -> dict[str, str | None]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
-    return {
-        "title": meta.get("title"),
-        "genres": meta.get("genres"),
-    }
-
-
-def _call_recommender(obj: Any, method_names: list[str], *args: Any, **kwargs: Any):
-    """
-    Try multiple method names on a model object until one exists.
-    """
-    for name in method_names:
-        fn = getattr(obj, name, None)
-        if callable(fn):
-            return fn(*args, **kwargs)
-    raise AttributeError(f"None of these methods exist on {type(obj).__name__}: {method_names}")
-
-
-def _normalize_recs(raw: Any) -> list[dict[str, Any]]:
-    """
-    Normalize recommender output into:
-      [{"movie_id": int, "score": float}, ...]
-    Accepts:
-      - list[dict] with movie_id/score
-      - list[tuple(movie_id, score)]
-      - list[int] (score omitted)
-      - dict with key "recommendations"
-    """
-    if raw is None:
-        return []
-
-    if isinstance(raw, dict) and "recommendations" in raw:
-        raw = raw["recommendations"]
-
-    if not isinstance(raw, list):
-        return []
-
-    out: list[dict[str, Any]] = []
-    for item in raw:
-        if isinstance(item, dict):
-            mid = item.get("movie_id") or item.get("movieId") or item.get("id") or item.get("item")
-            score = item.get("score")
-            if mid is None:
-                continue
-            try:
-                movie_id = int(mid)
-            except Exception:
-                continue
-            rec: dict[str, Any] = {"movie_id": movie_id}
-            if score is not None:
-                try:
-                    rec["score"] = float(score)
-                except Exception:
-                    pass
-            out.append(rec)
-            continue
-
-        if isinstance(item, (tuple, list)) and len(item) >= 1:
-            try:
-                movie_id = int(item[0])
-            except Exception:
-                continue
-            rec2: dict[str, Any] = {"movie_id": movie_id}
-            if len(item) >= 2 and item[1] is not None:
-                try:
-                    rec2["score"] = float(item[1])
-                except Exception:
-                    pass
-            out.append(rec2)
-            continue
-
-        # list[int]/list[str]
-        try:
-            movie_id = int(item)
-        except Exception:
-            continue
-        out.append({"movie_id": movie_id})
-
-    return out
+    return {"title": meta.get("title"), "genres": meta.get("genres")}
 
 
 def _ensure_loaded() -> None:
     if not MODELS_LOADED or POP_MODEL is None:
         raise HTTPException(status_code=503, detail="Models not loaded. Train first.")
+
+
+def _normalize_list(raw: Any, list_key: str) -> list[Any]:
+    if isinstance(raw, dict) and list_key in raw and isinstance(raw[list_key], list):
+        return raw[list_key]
+    if isinstance(raw, list):
+        return raw
+    return []
 
 
 @asynccontextmanager
@@ -113,22 +51,33 @@ async def lifespan(app: FastAPI):
     CONTENT_MODEL = None
     MOVIES_LOOKUP = {}
 
-    # Load models (from artifacts)
-    try:
-        pop, content, _metrics = load_models(settings.run_id)
-        POP_MODEL = pop
-        CONTENT_MODEL = content
-        MODELS_LOADED = True
-    except Exception:
-        # Keep API up, but mark models not loaded
-        MODELS_LOADED = False
-
-    # Load movie titles/genres lookup (from downloaded dataset dir)
-    # This is optional; API will still work without it.
+    # Load movie metadata (optional)
     try:
         MOVIES_LOOKUP = load_movies_lookup(settings.data_dir)
     except Exception:
         MOVIES_LOOKUP = {}
+
+    # Load models from artifacts
+    try:
+        models_dir = _models_dir()
+        pop_path = models_dir / "popularity.joblib"
+        content_path = models_dir / "content_tfidf.joblib"
+
+        if not pop_path.exists():
+            MODELS_LOADED = False
+            yield
+            return
+
+        POP_MODEL = load(pop_path)
+
+        if content_path.exists():
+            CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
+        else:
+            CONTENT_MODEL = None
+
+        MODELS_LOADED = True
+    except Exception:
+        MODELS_LOADED = False
 
     yield
 
@@ -158,7 +107,7 @@ def health():
     return {
         "status": "ok",
         "run_id": settings.run_id,
-        "models_loaded": MODELS_LOADED and POP_MODEL is not None,
+        "models_loaded": bool(MODELS_LOADED and POP_MODEL is not None),
     }
 
 
@@ -170,46 +119,38 @@ def recommendations(
 ):
     _ensure_loaded()
 
-    # Popularity model usually ignores user_id; content may use it.
     if strategy == "popularity":
-        raw = _call_recommender(
-            POP_MODEL,
-            ["recommend", "recommend_for_user", "predict", "top_k"],
-            user_id,
-            k,
+        raw = (
+            POP_MODEL.recommend(user_id=user_id, k=k)
+            if hasattr(POP_MODEL, "recommend")
+            else POP_MODEL.top_k(k)  # type: ignore[attr-defined]
         )
     else:
         if CONTENT_MODEL is None:
             raise HTTPException(status_code=400, detail="Content model is not available.")
-        raw = _call_recommender(
-            CONTENT_MODEL,
-            ["recommend_for_user", "recommend", "predict", "top_k"],
-            user_id,
-            k,
+        raw = (
+            CONTENT_MODEL.recommend_for_user(user_id=user_id, k=k)
+            if hasattr(CONTENT_MODEL, "recommend_for_user")
+            else CONTENT_MODEL.recommend(user_id=user_id, k=k)  # type: ignore[attr-defined]
         )
 
-    recs = _normalize_recs(raw)
+    items = _normalize_list(raw, "recommendations")
+    recs: list[dict[str, Any]] = []
 
-    # Enrich with title/genres if we have them
-    enriched = []
-    for r in recs:
-        movie_id = int(r["movie_id"])
-        out = {
-            "movie_id": movie_id,
-            **_enrich_movie(movie_id),
-            "score": float(r.get("score")) if r.get("score") is not None else None,
-        }
-        # drop score if None to keep response clean
-        if out["score"] is None:
-            out.pop("score")
-        enriched.append(out)
+    for item in items:
+        if isinstance(item, dict):
+            movie_id = int(item.get("movie_id") or item.get("movieId"))
+            score = item.get("score")
+        else:
+            movie_id = int(item[0])
+            score = item[1] if len(item) > 1 else None
 
-    return {
-        "user_id": user_id,
-        "k": k,
-        "strategy": strategy,
-        "recommendations": enriched,
-    }
+        out: dict[str, Any] = {"movie_id": movie_id, **_enrich(movie_id)}
+        if score is not None:
+            out["score"] = float(score)
+        recs.append(out)
+
+    return {"user_id": user_id, "k": k, "strategy": strategy, "recommendations": recs}
 
 
 @app.get("/v1/similar-items")
@@ -221,28 +162,26 @@ def similar_items(
     if CONTENT_MODEL is None:
         raise HTTPException(status_code=400, detail="Content model is not available.")
 
-    raw = _call_recommender(
-        CONTENT_MODEL,
-        ["similar_items", "similar_movies", "most_similar", "recommend_similar", "similar"],
-        movie_id,
-        k,
+    raw = (
+        CONTENT_MODEL.similar_items(movie_id=movie_id, k=k)
+        if hasattr(CONTENT_MODEL, "similar_items")
+        else CONTENT_MODEL.most_similar(movie_id=movie_id, k=k)  # type: ignore[attr-defined]
     )
 
-    recs = _normalize_recs(raw)
-    enriched = []
-    for r in recs:
-        mid = int(r["movie_id"])
-        out = {
-            "movie_id": mid,
-            **_enrich_movie(mid),
-            "score": float(r.get("score")) if r.get("score") is not None else None,
-        }
-        if out["score"] is None:
-            out.pop("score")
-        enriched.append(out)
+    items = _normalize_list(raw, "similar_items")
+    out_items: list[dict[str, Any]] = []
 
-    return {
-        "movie_id": movie_id,
-        "k": k,
-        "similar_items": enriched,
-    }
+    for item in items:
+        if isinstance(item, dict):
+            mid = int(item.get("movie_id") or item.get("movieId"))
+            score = item.get("score")
+        else:
+            mid = int(item[0])
+            score = item[1] if len(item) > 1 else None
+
+        out: dict[str, Any] = {"movie_id": mid, **_enrich(mid)}
+        if score is not None:
+            out["score"] = float(score)
+        out_items.append(out)
+
+    return {"movie_id": movie_id, "k": k, "similar_items": out_items}
