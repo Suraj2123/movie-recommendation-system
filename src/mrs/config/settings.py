@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,11 +9,10 @@ class Settings(BaseSettings):
     """
     Central application settings.
 
-    Values are read from environment variables if present,
-    otherwise sensible defaults are used.
+    Environment variables override defaults automatically.
     """
 
-    # IMPORTANT: Render will inject RUN_ID=prod
+    # Render provides RUN_ID=prod
     run_id: str = "local"
 
     # Where trained artifacts are stored
@@ -29,8 +28,7 @@ class Settings(BaseSettings):
 # Singleton settings instance
 settings = Settings()
 
+# Optional sanity output if run directly
 if __name__ == "__main__":
-    print("RUN_ID:", settings.run_id)
-    print("ARTIFACTS_DIR:", settings.artifacts_dir)
-    print("CWD:", Path.cwd())
-
+    print("run_id:", settings.run_id)
+    print("artifacts_dir:", Path(settings.artifacts_dir).resolve())
