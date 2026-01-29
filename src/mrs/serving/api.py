@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+import math
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -22,19 +23,36 @@ MODELS_LOADED = False
 
 def _models_dir() -> Path:
     return Path(settings.artifacts_dir) / settings.run_id / "models"
+def _clean_text(v: Any) -> str | None:
+    if v is None:
+        return None
+    # handle NaN (works for float nan and numpy/pandas nan)
+    try:
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        if v != v:  # NaN is not equal to itself
+            return None
+    except Exception:
+        pass
+    # ensure plain string
+    s = str(v).strip()
+    return s if s else None
 
 
 def _enrich(movie_id: int) -> dict[str, str | None]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
-    return {"title": meta.get("title"), "genres": meta.get("genres")}
+    return {
+        "title": _clean_text(meta.get("title")),
+        "genres": _clean_text(meta.get("genres")),
+    }
 
 
 def _movie_record(movie_id: int) -> dict[str, Any]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
     return {
         "movie_id": movie_id,
-        "title": meta.get("title"),
-        "genres": meta.get("genres"),
+        "title": _clean_text(meta.get("title")),
+        "genres": _clean_text(meta.get("genres")),
     }
 
 
@@ -138,7 +156,7 @@ def search_movies(
         title = (meta.get("title") or "")
         if query in title.casefold():
             results.append(
-                {"movie_id": mid, "title": meta.get("title"), "genres": meta.get("genres")}
+                {"movie_id": mid, "title": _clean_text(meta.get("title")), "genres": _clean_text(meta.get("genres")),}
             )
             if len(results) >= limit:
                 break
