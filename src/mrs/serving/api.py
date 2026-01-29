@@ -29,6 +29,15 @@ def _enrich(movie_id: int) -> dict[str, str | None]:
     return {"title": meta.get("title"), "genres": meta.get("genres")}
 
 
+def _movie_record(movie_id: int) -> dict[str, Any]:
+    meta = MOVIES_LOOKUP.get(movie_id, {})
+    return {
+        "movie_id": movie_id,
+        "title": meta.get("title"),
+        "genres": meta.get("genres"),
+    }
+
+
 def _ensure_loaded() -> None:
     if not MODELS_LOADED or POP_MODEL is None:
         raise HTTPException(status_code=503, detail="Models not loaded. Train first.")
@@ -57,8 +66,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         MOVIES_LOOKUP = {}
 
-    # Load models from artifacts
-    # Load models from artifacts (popularity first; content optional)
+    # Load popularity model from artifacts (required).
+    # Content model is lazy-loaded on first /v1/similar-items call (free-tier safe).
     try:
         models_dir = _models_dir()
         pop_path = models_dir / "popularity.joblib"
@@ -68,17 +77,12 @@ async def lifespan(app: FastAPI):
             yield
             return
 
-        # Popularity model = required
         POP_MODEL = load(pop_path)
         MODELS_LOADED = True
 
-        # Content model = optional (do NOT crash API if it fails)
         CONTENT_MODEL = None
-
-
     except Exception:
         MODELS_LOADED = False
-
 
     yield
 
@@ -112,6 +116,36 @@ def health():
     }
 
 
+@app.get("/v1/movies/{movie_id}")
+def get_movie(movie_id: int):
+    rec = _movie_record(movie_id)
+    if rec["title"] is None and rec["genres"] is None:
+        raise HTTPException(status_code=404, detail="Movie not found.")
+    return rec
+
+
+@app.get("/v1/movies/search")
+def search_movies(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+):
+    query = q.strip().casefold()
+    if not query:
+        raise HTTPException(status_code=400, detail="Empty query.")
+
+    results: list[dict[str, Any]] = []
+    for mid, meta in MOVIES_LOOKUP.items():
+        title = (meta.get("title") or "")
+        if query in title.casefold():
+            results.append(
+                {"movie_id": mid, "title": meta.get("title"), "genres": meta.get("genres")}
+            )
+            if len(results) >= limit:
+                break
+
+    return {"q": q, "limit": limit, "results": results}
+
+
 @app.get("/v1/recommendations")
 def recommendations(
     user_id: int = Query(..., ge=1),
@@ -128,7 +162,10 @@ def recommendations(
         )
     else:
         if CONTENT_MODEL is None:
-            raise HTTPException(status_code=400, detail="Content model is not available.")
+            raise HTTPException(
+                status_code=400,
+                detail="Content model is not loaded. Use /v1/similar-items first (lazy-load).",
+            )
         raw = (
             CONTENT_MODEL.recommend_for_user(user_id=user_id, k=k)
             if hasattr(CONTENT_MODEL, "recommend_for_user")
@@ -161,7 +198,6 @@ def similar_items(
 ):
     _ensure_loaded()
 
-    # Lazy-load the content model only when needed (free-tier safe)
     global CONTENT_MODEL
     if CONTENT_MODEL is None:
         try:
@@ -224,3 +260,4 @@ def similar_items(
         out_items.append(out)
 
     return {"movie_id": movie_id, "k": k, "similar_items": out_items}
+
