@@ -387,10 +387,7 @@ with tab_about:
     st.subheader("ℹ️ About this demo")
     st.markdown(
         """
-- **Netflix-style rows**: Trending, For You, Search Results, Similar Explorer  
-- **Exploration loop**: Details → Similar → Add to My List  
-- **Resilience**: Retries and friendly messages for Render free-tier cold starts  
-- **Optional posters**: Add `TMDB_API_KEY` to the UI service to show real posters  
+
 
 **Render env vars**
 - UI: `API_BASE_URL` = your API service URL  
