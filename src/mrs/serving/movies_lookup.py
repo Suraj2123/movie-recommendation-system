@@ -9,11 +9,17 @@ def load_movies_lookup(dataset_dir: str | Path) -> dict[int, dict[str, str]]:
     Load MovieLens movies.csv into:
       movie_id -> {"title": str, "genres": str}
 
+    Looks for movies.csv in dataset_dir or dataset_dir/ml-latest-small.
     Expected schema (MovieLens): movieId,title,genres
     """
     dataset_dir = Path(dataset_dir)
-    movies_csv = dataset_dir / "movies.csv"
-    if not movies_csv.exists():
+    candidates = [dataset_dir / "movies.csv", dataset_dir / "ml-latest-small" / "movies.csv"]
+    movies_csv = None
+    for c in candidates:
+        if c.exists():
+            movies_csv = c
+            break
+    if movies_csv is None:
         return {}
 
     lookup: dict[int, dict[str, str]] = {}

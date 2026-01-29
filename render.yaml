@@ -13,8 +13,10 @@ services:
     envVars:
       - key: RUN_ID
         value: prod
+      - key: MRS_RUN_ID
+        value: prod
 
-  # 2) Streamlit UI (playground)
+  # 2) Streamlit UI – set API_BASE_URL to your deployed API URL (often ...api.onrender.com)
   - type: web
     name: movie-recommendation-ui
     env: python

@@ -1,96 +1,90 @@
-# 🎬 Movie Recommendation System (MRS)
+# Movie Recommendation System
 
-Production-style movie recommendation system with offline training, evaluation, and a live FastAPI service.
-
-**Live Demo (Swagger UI):**  
-👉 https://movie-recommendation-system-oivj.onrender.com/docs  
-
-**Health Check:**  
-👉 https://movie-recommendation-system-oivj.onrender.com/health  
+A **production-style** movie recommender with offline training, FastAPI serving, and a polished Streamlit UI. Train on MovieLens, serve popularity and content-based (TF-IDF) recommendations, and run locally or deploy to Render.
 
 ---
 
-## Overview
+## Quick start (local)
 
-This project demonstrates an end-to-end recommender system workflow:
+**One command** — installs deps, trains models (downloads MovieLens), starts API + UI:
 
-- Offline data processing and model training
-- Baseline and content-based recommendation models
-- Offline evaluation and artifact versioning
-- Production-style FastAPI service
-- Publicly deployed, interactive API demo
+```bash
+./scripts/run_local.sh
+```
 
-The system is designed to resemble a real-world ML service rather than a notebook-only project.
+Then open **http://localhost:8501**.
+
+**Manual run:**
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" && pip install -r app/requirements.txt
+
+# 1. Train (downloads MovieLens, writes artifacts/local)
+python -m mrs.pipelines.train --run-id local
+
+# 2. Start API
+uvicorn mrs.serving.api:app --reload --host 127.0.0.1 --port 8000
+
+# 3. In another terminal, start UI
+API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py
+```
 
 ---
 
 ## Features
 
-### Models
-- **Popularity-based recommender**
-  - Ranks movies by Bayesian-smoothed average rating
-- **Content-based recommender**
-  - TF-IDF over movie titles and genres
-  - Cosine similarity for item-to-item recommendations
-
-### Pipelines
-- Dataset download (MovieLens latest-small)
-- Preprocessing and chronological train/test split
-- Offline evaluation
-- Versioned artifacts (`artifacts/<run_id>/`)
-
-### API (FastAPI)
-- Health and model metadata
-- User recommendations
-- Similar-item recommendations
-- Swagger UI for interactive exploration
-
-### Engineering Practices
-- Production-style repo layout
-- Clear separation of data, models, pipelines, and serving
-- GitHub Actions CI (lint + tests)
-- Public cloud deployment (Render)
+- **Models:** Popularity (Bayesian-smoothed ratings), Content-based (TF-IDF + cosine similarity).
+- **API:** FastAPI — health, recommendations, similar-items, movie search, movie by ID.
+- **UI:** Streamlit app — trending, “for you” picks, search, similar movies, watchlist.
 
 ---
 
-## Live Demo (How to Try)
-
-1. Open the Swagger UI:  
-   👉 https://movie-recommendation-system-oivj.onrender.com/docs
-
-2. Click **GET /v1/recommendations → Try it out**
-   - `user_id`: `1`
-   - `k`: `10`
-   - `strategy`: `popularity`
-   - Click **Execute**
-
-3. Try **GET /v1/similar-items**
-   - `movie_id`: `1`
-   - `k`: `10`
-
-No setup required — this runs against the deployed service.
-
----
-
-## API Endpoints
+## API
 
 | Method | Endpoint | Description |
-|------|---------|-------------|
-| GET | `/health` | Service and model status |
-| GET | `/v1/model-info` | Model version and offline metrics |
-| GET | `/v1/recommendations` | Top-K recommendations for a user |
-| GET | `/v1/similar-items` | Similar movies (content-based) |
+|--------|----------|-------------|
+| GET | `/health` | Status and model load |
+| GET | `/v1/model-info` | Model version and metrics |
+| GET | `/v1/recommendations` | Top‑K for user (`strategy=popularity\|content`) |
+| GET | `/v1/similar-items` | Similar movies by `movie_id` |
+| GET | `/v1/movies/search` | Search by title `q` |
+| GET | `/v1/movies/{id}` | Movie details |
 
 ---
 
-## Offline Training (Local)
+## Deploy (Render)
 
-If you want to run everything locally:
+1. **Connect** the repo to [Render](https://render.com) and add a **Blueprint** from `render.yaml`.
+2. **Deploy** both services:
+   - **movie-recommendation-api:** trains on build, serves the API.
+   - **movie-recommendation-ui:** Streamlit app.
+3. Set the UI env var **`API_BASE_URL`** to your deployed API URL (e.g. `https://movie-recommendation-api.onrender.com`). Update in Render dashboard if the default subdomain differs.
+4. Optional: **`TMDB_API_KEY`** on the UI service for poster images.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e ".[dev]"
-python -m mrs.pipelines.train --run-id local
+---
 
+## Project layout
+
+```
+├── app/
+│   ├── requirements.txt    # Streamlit UI deps
+│   └── streamlit_app.py    # UI
+├── scripts/
+│   └── run_local.sh        # Local run script
+├── src/mrs/
+│   ├── config/
+│   ├── data/               # Download + preprocess
+│   ├── evaluation/
+│   ├── models/             # Popularity, Content TF-IDF
+│   ├── pipelines/          # Train
+│   └── serving/            # API + movies lookup
+├── render.yaml
+└── pyproject.toml
+```
+
+---
+
+## License
+
+See project license file.

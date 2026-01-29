@@ -1,35 +1,32 @@
 from __future__ import annotations
 
-import io
 import zipfile
 from pathlib import Path
 
 import requests
 
+ML_SMALL_URL = "https://files.grouplens.org/datasets/movielens/ml-latest-small.zip"
+EXTRACT_DIR = "ml-latest-small"
 
-MOVIELENS_URL = "https://files.grouplens.org/datasets/movielens/ml-latest-small.zip"
 
-
-def download_movielens_latest_small(data_dir: str) -> Path:
+def download_movielens_latest_small(data_dir: str | Path) -> Path:
     """
-    Downloads MovieLens latest-small and extracts it.
-    Returns the extracted dataset directory path, e.g. data/ml-latest-small
+    Download MovieLens ml-latest-small and extract to data_dir/ml-latest-small.
+    Returns the path to the extracted directory (containing movies.csv, ratings.csv, etc.).
     """
-    root = Path(data_dir)
-    root.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = data_dir / "ml-latest-small.zip"
+    out_dir = data_dir / EXTRACT_DIR
 
-    zip_path = root / "ml-latest-small.zip"
-    extract_dir = root / "ml-latest-small"
+    if out_dir.exists() and (out_dir / "movies.csv").exists() and (out_dir / "ratings.csv").exists():
+        return out_dir
 
-    if extract_dir.exists():
-        return extract_dir
+    r = requests.get(ML_SMALL_URL, timeout=120)
+    r.raise_for_status()
+    zip_path.write_bytes(r.content)
 
-    resp = requests.get(MOVIELENS_URL, timeout=60)
-    resp.raise_for_status()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(data_dir)
 
-    zip_path.write_bytes(resp.content)
-
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        zf.extractall(root)
-
-    return extract_dir
+    return out_dir

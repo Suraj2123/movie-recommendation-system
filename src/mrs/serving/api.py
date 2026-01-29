@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 import math
@@ -8,7 +9,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Query
 from joblib import load
 
-from mrs.config.settings import settings
+from mrs.config.settings import settings, Settings
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
 from mrs.serving.movies_lookup import load_movies_lookup
@@ -21,7 +22,11 @@ MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
 MODELS_LOADED = False
 
 def _models_dir() -> Path:
-    return Path(settings.artifacts_dir) / settings.run_id / "models"
+    return Path(settings.artifacts_dir) / Settings.run_id_from_env() / "models"
+
+
+def _run_dir() -> Path:
+    return Path(settings.artifacts_dir) / Settings.run_id_from_env()
 
 def _clean_text(v: Any) -> str | None:
     if v is None:
@@ -63,6 +68,24 @@ def _normalize_list(raw: Any, list_key: str) -> list[Any]:
     if isinstance(raw, list):
         return raw
     return []
+
+
+def _item_to_mid_score(item: Any) -> tuple[int, float | None]:
+    """Extract (movie_id, score) from dict, tuple-like, or Rec-style object."""
+    if isinstance(item, dict):
+        mid = int(
+            item.get("movie_id") or item.get("movieId") or item.get("id") or item.get("item") or 0
+        )
+        score = item.get("score")
+        return mid, float(score) if score is not None else None
+    if hasattr(item, "movie_id") and hasattr(item, "score"):
+        return int(item.movie_id), float(item.score)
+    try:
+        mid = int(item[0])
+        score = float(item[1]) if len(item) > 1 and item[1] is not None else None
+        return mid, score
+    except (IndexError, TypeError, KeyError):
+        return 0, None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -122,9 +145,27 @@ def root():
 def health():
     return {
         "status": "ok",
-        "run_id": settings.run_id,
+        "run_id": Settings.run_id_from_env(),
         "models_loaded": bool(MODELS_LOADED and POP_MODEL is not None),
     }
+
+
+@app.get("/v1/model-info")
+def model_info():
+    out: dict[str, Any] = {
+        "run_id": Settings.run_id_from_env(),
+        "models_loaded": bool(MODELS_LOADED and POP_MODEL is not None),
+    }
+    run_dir = _run_dir()
+    for name, f in [("manifest", "manifest.json"), ("metrics", "metrics.json")]:
+        p = run_dir / f
+        if p.exists():
+            try:
+                out[name] = json.loads(p.read_text())
+            except Exception:
+                out[name] = None
+    return out
+
 
 @app.get("/v1/movies/{movie_id}")
 def get_movie(movie_id: int):
@@ -204,13 +245,9 @@ def recommendations(
     recs: list[dict[str, Any]] = []
 
     for item in items:
-        if isinstance(item, dict):
-            movie_id = int(item.get("movie_id") or item.get("movieId") or item.get("id"))
-            score = item.get("score")
-        else:
-            movie_id = int(item[0])
-            score = item[1] if len(item) > 1 else None
-
+        movie_id, score = _item_to_mid_score(item)
+        if movie_id <= 0:
+            continue
         out: dict[str, Any] = {"movie_id": movie_id, **_enrich(movie_id)}
         if score is not None:
             out["score"] = float(score)
@@ -274,16 +311,12 @@ def similar_items(
     out_items: list[dict[str, Any]] = []
 
     for item in items:
-        if isinstance(item, dict):
-            mid = int(item.get("movie_id") or item.get("movieId") or item.get("id") or item.get("item"))
-            score = item.get("score")
-        else:
-            mid = int(item[0])
-            score = item[1] if len(item) > 1 else None
-
-        out: dict[str, Any] = {"movie_id": mid, **_enrich(mid)}
+        mid, score = _item_to_mid_score(item)
+        if mid <= 0:
+            continue
+        out_dict: dict[str, Any] = {"movie_id": mid, **_enrich(mid)}
         if score is not None:
-            out["score"] = float(score)
-        out_items.append(out)
+            out_dict["score"] = float(score)
+        out_items.append(out_dict)
 
     return {"movie_id": movie_id, "k": k, "similar_items": out_items}

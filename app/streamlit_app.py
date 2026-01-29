@@ -10,15 +10,15 @@ from typing import Any
 import requests
 import streamlit as st
 
-
-APP_TITLE = "🎬 Movie Recommendation System"
-API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
+APP_TITLE = "Movie Picks"
+APP_TAGLINE = "Recommendations powered by popularity & content-based models"
+API_BASE_URL = (os.getenv("API_BASE_URL", "").strip().rstrip("/") or "http://localhost:8000").rstrip("/")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
+LOCAL_DEFAULT = not os.getenv("API_BASE_URL", "").strip()
 
-
-def _stop(msg: str) -> None:
-    st.error(msg)
-    st.stop()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _sleep_backoff(attempt: int) -> None:
@@ -33,34 +33,28 @@ def call_api(
 ) -> tuple[dict[str, Any] | list[Any] | None, str | None]:
     url = f"{API_BASE_URL}{path}"
     last_err: str | None = None
-
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, params=params, timeout=timeout)
-
             if r.status_code >= 500 and attempt < retries:
                 _sleep_backoff(attempt)
                 continue
-
             if r.status_code >= 400:
                 body = (r.text or "").strip()
-                return None, f"{r.status_code} {r.reason}: {body[:600]}"
-
+                return None, f"{r.status_code} {r.reason}: {body[:500]}"
             try:
                 return r.json(), None
             except Exception:
                 ct = r.headers.get("content-type", "(missing)")
                 body = (r.text or "").strip()
-                return None, f"Expected JSON but got {ct}. Body: {body[:600]}"
-
+                return None, f"Expected JSON; got {ct}. {body[:500]}"
         except Exception as e:
             last_err = str(e)
             if attempt < retries:
                 _sleep_backoff(attempt)
                 continue
-            return None, f"Network error calling {url}: {last_err}"
-
-    return None, f"Unknown error calling {url}: {last_err}"
+            return None, f"Request failed: {last_err}"
+    return None, last_err or "Request failed"
 
 
 def safe_int(x: Any, default: int = 0) -> int:
@@ -74,9 +68,7 @@ def parse_year(title: str | None) -> int | None:
     if not title:
         return None
     m = re.search(r"\((\d{4})\)\s*$", title)
-    if not m:
-        return None
-    return int(m.group(1))
+    return int(m.group(1)) if m else None
 
 
 def strip_year(title: str | None) -> str:
@@ -89,12 +81,10 @@ def strip_year(title: str | None) -> str:
 def tmdb_search_poster(title: str, year: int | None) -> str | None:
     if not TMDB_API_KEY:
         return None
-
     base = "https://api.themoviedb.org/3/search/movie"
     params: dict[str, Any] = {"api_key": TMDB_API_KEY, "query": strip_year(title)}
     if year is not None:
         params["year"] = year
-
     try:
         r = requests.get(base, params=params, timeout=20)
         if r.status_code != 200:
@@ -121,10 +111,10 @@ class Movie:
 
 def poster_or_placeholder(m: Movie) -> str:
     if m.title and TMDB_API_KEY:
-        url = tmdb_search_poster(m.title, parse_year(m.title))
-        if url:
-            return url
-    return "https://dummyimage.com/342x513/111/ffffff.png&text=%F0%9F%8E%AC"
+        u = tmdb_search_poster(m.title, parse_year(m.title))
+        if u:
+            return u
+    return "https://placehold.co/342x513/1a1a2e/eee?text=🎬"
 
 
 def to_movies(items: Any, key: str) -> list[Movie]:
@@ -132,7 +122,6 @@ def to_movies(items: Any, key: str) -> list[Movie]:
         items = items[key]
     if not isinstance(items, list):
         return []
-
     out: list[Movie] = []
     for it in items:
         if not isinstance(it, dict):
@@ -155,6 +144,10 @@ def init_state() -> None:
         st.session_state["selected_movie_id"] = None
     if "last_search" not in st.session_state:
         st.session_state["last_search"] = ""
+    if "open_similar" not in st.session_state:
+        st.session_state["open_similar"] = False
+    if "similar_results" not in st.session_state:
+        st.session_state["similar_results"] = []
 
 
 def add_to_list(m: Movie) -> None:
@@ -169,76 +162,118 @@ def in_list(movie_id: int) -> bool:
     return movie_id in st.session_state["my_list"]
 
 
-st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="wide")
-init_state()
+# ---------------------------------------------------------------------------
+# Page config & theme
+# ---------------------------------------------------------------------------
 
-if not API_BASE_URL:
-    _stop("API_BASE_URL is not set. Set it in Render for the UI service.")
-
-st.title(APP_TITLE)
-st.caption(
-    "Netflix-style interactive demo powered by your FastAPI backend. "
-    "On Render free tier, cold starts happen — the UI retries automatically."
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-with st.container():
-    left, right = st.columns([2, 1], gap="large")
-    with left:
-        with st.spinner("Connecting to backend..."):
-            health, health_err = call_api("/health", timeout=20, retries=6)
+# Custom CSS: dark, cinematic
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .main { background: linear-gradient(180deg, #0f0f14 0%, #1a1a24 100%); }
+    section[data-testid="stSidebar"] { background: #12121a; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background: #1e1e2a; color: #a0a0b0; border-radius: 8px;
+        padding: 8px 16px; font-weight: 500;
+    }
+    .stTabs [aria-selected="true"] { background: #2d2d3d; color: #fff; }
+    div[data-testid="stHorizontalBlock"] > div { border-radius: 12px; }
+    .movie-card { border-radius: 12px; overflow: hidden; background: #1a1a24; border: 1px solid #2a2a3a; }
+    .hero { padding: 2rem 0 1.5rem; }
+    .hero h1 { font-size: 2.4rem; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
+    .hero p { color: #888; font-size: 1.05rem; margin-top: 0.25rem; }
+    .local-banner { background: #1e2a1e; color: #8bc34a; padding: 10px 16px; border-radius: 10px; margin-bottom: 1rem; font-size: 0.9rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-        if health_err:
-            st.warning("Backend is waking up or temporarily unavailable.")
-            st.caption(health_err)
-        else:
-            loaded = isinstance(health, dict) and health.get("models_loaded") is True
-            if loaded:
-                st.success("Backend healthy • Models loaded")
-            else:
-                st.warning("Backend healthy • Models not loaded yet")
-            st.json(health)
+init_state()
 
-    with right:
-        st.subheader("🎛️ Demo Controls")
-        user_id = st.number_input("User ID", min_value=1, value=1, step=1)
-        rec_k = st.slider("How many recommendations?", 5, 30, 12)
-        strategy = st.selectbox("Strategy", ["popularity", "content"], index=0)
+# ---------------------------------------------------------------------------
+# Sidebar: controls, status, My List
+# ---------------------------------------------------------------------------
 
-        st.caption("Optional: add TMDB_API_KEY to show real posters.")
-        if TMDB_API_KEY:
-            st.success("TMDB posters enabled")
-        else:
-            st.info("Posters disabled (no TMDB_API_KEY)")
+with st.sidebar:
+    st.markdown(f"### 🎬 {APP_TITLE}")
+    st.caption(APP_TAGLINE)
+    st.divider()
 
-st.divider()
+    if LOCAL_DEFAULT:
+        st.markdown(
+            '<div class="local-banner">Running against local API (localhost:8000). '
+            'Start it with: <code>uvicorn mrs.serving.api:app --reload</code></div>',
+            unsafe_allow_html=True,
+        )
 
-search_col, list_col = st.columns([3, 2], gap="large")
-with search_col:
-    st.subheader("🔎 Search movies")
-    q = st.text_input(
-        "Type a movie title",
-        value=st.session_state["last_search"],
-        placeholder="e.g., Shawshank, Toy Story, Matrix…",
-    )
-    do_search = st.button("Search", type="primary")
-with list_col:
-    st.subheader("✅ My List")
+    with st.spinner("Checking API…"):
+        health, health_err = call_api("/health", timeout=12, retries=3)
+
+    if health_err:
+        st.warning("API unreachable. Start the backend first.")
+        st.caption(health_err[:200])
+    else:
+        ok = isinstance(health, dict) and health.get("models_loaded") is True
+        st.success("API ready · Models loaded" if ok else "API ready · Models loading…")
+
+    st.divider()
+    st.subheader("Controls")
+    user_id = st.number_input("User ID", min_value=1, value=1, step=1, key="user_id")
+    rec_k = st.slider("Recommendations count", 5, 30, 12, key="rec_k")
+    strategy = st.selectbox("Strategy", ["popularity", "content"], index=0, key="strategy")
+    st.caption("Popularity = top-rated; Content = TF‑IDF similarity.")
+
+    if TMDB_API_KEY:
+        st.caption("🖼️ TMDB posters enabled")
+    else:
+        st.caption("🖼️ Set TMDB_API_KEY for posters")
+
+    st.divider()
+    st.subheader("My List")
     my_list_items = list(st.session_state["my_list"].values())
     if not my_list_items:
-        st.caption("Save movies here to build a mini watchlist.")
+        st.caption("Add movies from the home feed.")
     else:
-        for m in my_list_items[:8]:
-            cols = st.columns([5, 1])
-            cols[0].write(m.title or f"Movie {m.movie_id}")
-            if cols[1].button("✖", key=f"rm_{m.movie_id}"):
-                remove_from_list(m.movie_id)
-                st.rerun()
+        for m in my_list_items[:12]:
+            c1, c2 = st.columns([5, 1])
+            with c1:
+                st.caption(m.title or f"Movie {m.movie_id}")
+            with c2:
+                if st.button("✖", key=f"rm_{m.movie_id}"):
+                    remove_from_list(m.movie_id)
+                    st.rerun()
+
+# ---------------------------------------------------------------------------
+# Main: hero, search, tabs
+# ---------------------------------------------------------------------------
+
+st.markdown('<div class="hero"><h1>Discover movies</h1><p>Trending, picks for you, and similar titles.</p></div>', unsafe_allow_html=True)
+
+search_col, _ = st.columns([3, 1])
+with search_col:
+    q = st.text_input(
+        "Search by title",
+        value=st.session_state["last_search"],
+        placeholder="e.g. Shawshank, Toy Story, Matrix…",
+        key="search_q",
+    )
+    do_search = st.button("Search", type="primary", key="do_search")
 
 search_results: list[Movie] = []
-if do_search and q.strip():
+if do_search and (q or "").strip():
     st.session_state["last_search"] = q.strip()
-    with st.spinner("Searching..."):
-        data, err = call_api("/v1/movies/search", params={"q": q.strip(), "limit": 24}, timeout=25, retries=4)
+    with st.spinner("Searching…"):
+        data, err = call_api("/v1/movies/search", params={"q": q.strip(), "limit": 24}, timeout=20, retries=3)
     if err:
         st.error(err)
     else:
@@ -250,87 +285,79 @@ selected_movie_id = st.session_state.get("selected_movie_id")
 def render_movie_card(m: Movie, key_prefix: str) -> None:
     poster = poster_or_placeholder(m)
     title = m.title or f"Movie {m.movie_id}"
-    subtitle = m.genres or "Genres unavailable"
-    score_txt = f"{m.score:.3f}" if m.score is not None else None
-
-    with st.container(border=True):
+    subtitle = m.genres or "—"
+    with st.container():
         st.image(poster, use_container_width=True)
         st.markdown(f"**{title}**")
         st.caption(subtitle)
-        if score_txt:
-            st.caption(f"Score: `{score_txt}`")
-
+        if m.score is not None:
+            st.caption(f"Score: {m.score:.3f}")
         b1, b2, b3 = st.columns(3)
-        if b1.button("Details", key=f"{key_prefix}_details_{m.movie_id}", use_container_width=True):
+        if b1.button("Details", key=f"{key_prefix}_d_{m.movie_id}", use_container_width=True):
             st.session_state["selected_movie_id"] = m.movie_id
             st.rerun()
-
         if not in_list(m.movie_id):
-            if b2.button("➕ My List", key=f"{key_prefix}_add_{m.movie_id}", use_container_width=True):
+            if b2.button("➕ List", key=f"{key_prefix}_a_{m.movie_id}", use_container_width=True):
                 add_to_list(m)
                 st.rerun()
         else:
-            if b2.button("✅ Saved", key=f"{key_prefix}_saved_{m.movie_id}", use_container_width=True):
-                pass
-
-        if b3.button("🎞️ Similar", key=f"{key_prefix}_sim_{m.movie_id}", use_container_width=True):
+            b2.button("✓ Saved", key=f"{key_prefix}_s_{m.movie_id}", use_container_width=True, disabled=True)
+        if b3.button("Similar", key=f"{key_prefix}_sim_{m.movie_id}", use_container_width=True):
             st.session_state["selected_movie_id"] = m.movie_id
             st.session_state["open_similar"] = True
             st.rerun()
 
 
 def render_row(title: str, movies: list[Movie], key_prefix: str) -> None:
-    st.subheader(title)
     if not movies:
-        st.caption("No items to show.")
+        st.caption("No movies to show.")
         return
-
+    st.subheader(title)
     cols = st.columns(6, gap="medium")
     for i, m in enumerate(movies[:12]):
         with cols[i % 6]:
             render_movie_card(m, key_prefix=f"{key_prefix}_{i}")
 
-
-tab_home, tab_similar, tab_about = st.tabs(["🏠 Home", "🎞️ Similar Explorer", "ℹ️ About"])
+tab_home, tab_similar, tab_about = st.tabs(["Home", "Similar movies", "About"])
 
 with tab_home:
-    with st.spinner("Loading Trending..."):
+    with st.spinner("Loading trending…"):
         rec_data, rec_err = call_api(
             "/v1/recommendations",
             params={"user_id": int(user_id), "k": int(rec_k), "strategy": "popularity"},
-            timeout=45,
-            retries=6,
+            timeout=40,
+            retries=5,
         )
     trending = [] if rec_err else to_movies(rec_data, "recommendations")
     if rec_err:
-        st.warning("Trending is temporarily unavailable (backend warming up).")
+        st.warning("Trending temporarily unavailable.")
         st.caption(rec_err)
     else:
-        render_row("🔥 Trending (Popularity)", trending, "trending")
+        render_row("Trending", trending, "trending")
 
-    with st.spinner("Loading For You..."):
+    with st.spinner("Loading for you…"):
         fy_data, fy_err = call_api(
             "/v1/recommendations",
             params={"user_id": int(user_id), "k": int(rec_k), "strategy": strategy},
-            timeout=60,
-            retries=6,
+            timeout=50,
+            retries=5,
         )
     for_you = [] if fy_err else to_movies(fy_data, "recommendations")
     if fy_err:
-        st.warning("For You is temporarily unavailable.")
+        st.warning("For you temporarily unavailable.")
         st.caption(fy_err)
     else:
-        render_row(f"✨ For You (strategy={strategy})", for_you, "for_you")
+        render_row(f"For you ({strategy})", for_you, "foryou")
 
     if search_results:
-        render_row(f"🔎 Search results for “{st.session_state['last_search']}”", search_results, "search")
+        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search")
 
     if selected_movie_id is not None:
         st.divider()
-        st.subheader("🎬 Selected movie")
-        details, det_err = call_api(f"/v1/movies/{int(selected_movie_id)}", timeout=25, retries=4)
+        st.subheader("Selected movie")
+        details, det_err = call_api(f"/v1/movies/{int(selected_movie_id)}", timeout=15, retries=2)
         if det_err:
-            st.warning("Could not load movie details.")
+            st.warning("Could not load details.")
             st.caption(det_err)
         else:
             m = Movie(
@@ -339,60 +366,66 @@ with tab_home:
                 genres=details.get("genres"),
                 score=None,
             )
-            cols = st.columns([1, 2], gap="large")
-            with cols[0]:
+            c1, c2 = st.columns([1, 2])
+            with c1:
                 st.image(poster_or_placeholder(m), use_container_width=True)
-            with cols[1]:
+            with c2:
                 st.markdown(f"## {m.title or f'Movie {m.movie_id}'}")
-                st.caption(m.genres or "Genres unavailable")
-                b1, b2, b3 = st.columns(3)
+                st.caption(m.genres or "—")
+                d1, d2, d3 = st.columns(3)
                 if not in_list(m.movie_id):
-                    if b1.button("➕ Add to My List", use_container_width=True):
+                    if d1.button("Add to list", key="sel_add"):
                         add_to_list(m)
                         st.rerun()
                 else:
-                    if b1.button("✅ In My List", use_container_width=True):
-                        pass
-                if b2.button("🎞️ Explore Similar", use_container_width=True):
+                    d1.button("In list", key="sel_in", disabled=True)
+                if d2.button("Find similar", key="sel_sim"):
                     st.session_state["open_similar"] = True
                     st.rerun()
-                if b3.button("❌ Clear selection", use_container_width=True):
+                if d3.button("Clear", key="sel_clear"):
                     st.session_state["selected_movie_id"] = None
                     st.rerun()
 
 with tab_similar:
-    st.subheader("🎞️ Similar Explorer")
-    st.caption(
-        "Pick a movie and fetch similar titles. First call can be slower on free tier because the content model lazy-loads."
-    )
+    st.subheader("Find similar movies")
+    st.caption("Pick a movie (by ID or from search) and get content-based recommendations.")
 
-    seed = st.number_input("Seed Movie ID", min_value=1, value=int(selected_movie_id or 318), step=1)
-    k_sim = st.slider("How many similar movies?", 5, 30, 12)
+    seed = st.number_input("Movie ID", min_value=1, value=int(selected_movie_id or 318), step=1, key="seed_id")
+    k_sim = st.slider("How many similar?", 5, 30, 12, key="k_sim")
 
-    if st.button("Find Similar", type="primary"):
-        with st.spinner("Fetching similar movies (may take 30–60s on first call)..."):
+    if st.button("Find similar", type="primary", key="find_sim"):
+        with st.spinner("Fetching similar movies…"):
             sim_data, sim_err = call_api(
                 "/v1/similar-items",
                 params={"movie_id": int(seed), "k": int(k_sim)},
                 timeout=90,
-                retries=8,
+                retries=6,
             )
         if sim_err:
             st.error(sim_err)
+            st.session_state["similar_results"] = []
         else:
             sims = to_movies(sim_data, "similar_items")
-            render_row("Because you watched…", sims, "similar_row")
+            st.session_state["similar_results"] = sims
+            render_row("Similar movies", sims, "sim")
+    else:
+        prev = st.session_state.get("similar_results") or []
+        if prev:
+            render_row("Similar movies (last run)", prev, "sim_prev")
 
 with tab_about:
-    st.subheader("ℹ️ About this demo")
+    st.subheader("About")
     st.markdown(
         """
+        **Movie Picks** uses a FastAPI backend with:
+        - **Popularity** recommender (Bayesian-smoothed ratings)
+        - **Content-based** model (TF‑IDF on title + genres, cosine similarity)
 
+        **Run locally**
+        1. Train: `python -m mrs.pipelines.train --run-id local`
+        2. API: `uvicorn mrs.serving.api:app --reload`
+        3. UI: `API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py`
 
-**Render env vars**
-- UI: `API_BASE_URL` = your API service URL  
-- UI (optional): `TMDB_API_KEY`  
-        """.strip()
+        **Deploy** (e.g. Render): set `API_BASE_URL` to your API URL; optional `TMDB_API_KEY` for posters.
+        """
     )
-
-
