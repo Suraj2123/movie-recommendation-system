@@ -61,7 +61,6 @@ def call_api(
             try:
                 return r.json(), None
             except Exception:
-                ct = r.headers.get("content-type", "(missing)")
                 body = (r.text or "").strip()
                 return None, _sanitize_error(0, "Invalid response", body)
         except Exception as e:
