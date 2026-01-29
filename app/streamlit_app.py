@@ -261,6 +261,7 @@ with st.sidebar:
         st.caption("🖼️ TMDB posters enabled")
     else:
         st.caption("🖼️ Set TMDB_API_KEY for posters")
+        st.markdown("[Get a TMDB API key](https://www.themoviedb.org/settings/api)")
 
     st.divider()
     st.subheader("My List")
@@ -344,6 +345,10 @@ def render_row(title: str, movies: list[Movie], key_prefix: str) -> None:
 tab_home, tab_similar, tab_about = st.tabs(["Home", "Similar movies", "About"])
 
 with tab_home:
+    my_list_main = list(st.session_state["my_list"].values())
+    if my_list_main:
+        render_row("My list", my_list_main, "mylist")
+
     with st.spinner("Loading trending…"):
         rec_data, rec_err = call_api(
             "/v1/recommendations",

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from joblib import dump, load
 import numpy as np
 import pandas as pd
-from joblib import dump, load
+from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -14,7 +15,7 @@ from mrs.models.base import Rec
 @dataclass
 class ContentTfidfModel:
     movie_ids: np.ndarray
-    tfidf_matrix: np.ndarray  
+    tfidf_matrix: csr_matrix
     vectorizer: TfidfVectorizer
 
     @staticmethod
@@ -27,10 +28,9 @@ class ContentTfidfModel:
     def train(cls, movies: pd.DataFrame) -> ContentTfidfModel:
         text = cls._make_text(movies)
         vectorizer = TfidfVectorizer(min_df=2, max_features=30_000, ngram_range=(1, 2))
-        x = vectorizer.fit_transform(text)
-        x_dense = x.toarray().astype(np.float32)
+        x = vectorizer.fit_transform(text).tocsr().astype(np.float32)
         movie_ids = movies["movieId"].to_numpy(dtype=np.int64)
-        return cls(movie_ids=movie_ids, tfidf_matrix=x_dense, vectorizer=vectorizer)
+        return cls(movie_ids=movie_ids, tfidf_matrix=x, vectorizer=vectorizer)
 
     def similar_items(self, movie_id: int, k: int) -> list[Rec]:
         idx = np.where(self.movie_ids == movie_id)[0]
@@ -44,11 +44,11 @@ class ContentTfidfModel:
         return [Rec(int(self.movie_ids[j]), float(sims[j])) for j in top_idx]
 
     def recommend(self, user_id: int, k: int) -> list[Rec]:
-        sims = cosine_similarity(self.tfidf_matrix, self.tfidf_matrix)
-        np.fill_diagonal(sims, 0.0)
-        centrality = sims.mean(axis=1)
-        top_idx = np.argsort(-centrality)[:k]
-        return [Rec(int(self.movie_ids[j]), float(centrality[j])) for j in top_idx]
+        # Efficient fallback: similarity to corpus centroid (no NxN matrix)
+        centroid = np.asarray(self.tfidf_matrix.mean(axis=0))
+        sims = cosine_similarity(self.tfidf_matrix, centroid).ravel()
+        top_idx = np.argsort(-sims)[:k]
+        return [Rec(int(self.movie_ids[j]), float(sims[j])) for j in top_idx]
 
     def save(self, path: str) -> None:
         dump(
