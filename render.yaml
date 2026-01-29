@@ -25,7 +25,7 @@ services:
       pip install -U pip
       pip install -r app/requirements.txt
     startCommand: |
-      streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port $PORT
+      python -m streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
     envVars:
       - key: API_BASE_URL
         value: https://movie-recommendation-api.onrender.com
