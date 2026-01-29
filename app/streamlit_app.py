@@ -93,12 +93,12 @@ def strip_year(title: str | None) -> str:
     return re.sub(r"\s*\(\d{4}\)\s*$", "", title).strip()
 
 
-@st.cache_data(ttl=24 * 3600)
-def tmdb_search_poster(title: str, year: int | None) -> str | None:
-    if not TMDB_API_KEY:
+@st.cache_data(ttl=6 * 3600)
+def tmdb_search_poster(title: str, year: int | None, api_key: str) -> str | None:
+    if not api_key:
         return None
     base = "https://api.themoviedb.org/3/search/movie"
-    params: dict[str, Any] = {"api_key": TMDB_API_KEY, "query": strip_year(title)}
+    params: dict[str, Any] = {"api_key": api_key, "query": strip_year(title)}
     if year is not None:
         params["year"] = year
     try:
@@ -133,7 +133,7 @@ _PLACEHOLDER_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="342" height
 
 def poster_or_placeholder(m: Movie) -> str:
     if m.title and TMDB_API_KEY:
-        u = tmdb_search_poster(m.title, parse_year(m.title))
+        u = tmdb_search_poster(m.title, parse_year(m.title), TMDB_API_KEY)
         if u:
             return u
     return _PLACEHOLDER_SVG
@@ -170,6 +170,8 @@ def init_state() -> None:
         st.session_state["open_similar"] = False
     if "similar_results" not in st.session_state:
         st.session_state["similar_results"] = []
+    if "row_limits" not in st.session_state:
+        st.session_state["row_limits"] = {}
 
 
 def add_to_list(m: Movie) -> None:
@@ -253,12 +255,15 @@ with st.sidebar:
     st.divider()
     st.subheader("Controls")
     user_id = st.number_input("User ID", min_value=1, value=1, step=1, key="user_id")
-    rec_k = st.slider("Recommendations count", 5, 30, 12, key="rec_k")
+    rec_k = st.slider("Recommendations count", 5, 50, 20, key="rec_k")
     strategy = st.selectbox("Strategy", ["popularity", "content"], index=0, key="strategy")
     st.caption("Popularity = top-rated; Content = TF‑IDF similarity.")
 
     if TMDB_API_KEY:
         st.caption("🖼️ TMDB posters enabled")
+        if st.button("Clear poster cache", key="clear_poster_cache"):
+            st.cache_data.clear()
+            st.rerun()
     else:
         st.caption("🖼️ Set TMDB_API_KEY for posters")
         st.markdown("[Get a TMDB API key](https://www.themoviedb.org/settings/api)")
@@ -332,22 +337,32 @@ def render_movie_card(m: Movie, key_prefix: str) -> None:
             st.rerun()
 
 
-def render_row(title: str, movies: list[Movie], key_prefix: str) -> None:
+def render_row(title: str, movies: list[Movie], key_prefix: str, default_limit: int = 12) -> None:
     if not movies:
         st.caption("No movies to show.")
         return
     st.subheader(title)
+    limit = st.session_state["row_limits"].get(key_prefix, default_limit)
+    limit = max(default_limit, min(limit, len(movies)))
     cols = st.columns(4, gap="medium")
-    for i, m in enumerate(movies[:12]):
+    for i, m in enumerate(movies[:limit]):
         with cols[i % 4]:
             render_movie_card(m, key_prefix=f"{key_prefix}_{i}")
+    if len(movies) > limit:
+        if st.button("Show more", key=f"{key_prefix}_more"):
+            st.session_state["row_limits"][key_prefix] = limit + default_limit
+            st.rerun()
+    if limit > default_limit:
+        if st.button("Show less", key=f"{key_prefix}_less"):
+            st.session_state["row_limits"][key_prefix] = default_limit
+            st.rerun()
 
 tab_home, tab_similar, tab_about = st.tabs(["Home", "Similar movies", "About"])
 
 with tab_home:
     my_list_main = list(st.session_state["my_list"].values())
     if my_list_main:
-        render_row("My list", my_list_main, "mylist")
+        render_row("My list", my_list_main, "mylist", default_limit=8)
 
     with st.spinner("Loading trending…"):
         rec_data, rec_err = call_api(
@@ -361,7 +376,7 @@ with tab_home:
         st.warning("Trending temporarily unavailable.")
         st.caption(rec_err)
     else:
-        render_row("Trending", trending, "trending")
+        render_row("Trending", trending, "trending", default_limit=min(12, int(rec_k)))
 
     with st.spinner("Loading for you…"):
         fy_data, fy_err = call_api(
@@ -375,10 +390,10 @@ with tab_home:
         st.warning("For you temporarily unavailable.")
         st.caption(fy_err)
     else:
-        render_row(f"For you ({strategy})", for_you, "foryou")
+        render_row(f"For you ({strategy})", for_you, "foryou", default_limit=min(12, int(rec_k)))
 
     if search_results:
-        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search")
+        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search", default_limit=12)
 
     if selected_movie_id is not None:
         st.divider()
@@ -436,11 +451,11 @@ with tab_similar:
         else:
             sims = to_movies(sim_data, "similar_items")
             st.session_state["similar_results"] = sims
-            render_row("Similar movies", sims, "sim")
+            render_row("Similar movies", sims, "sim", default_limit=12)
     else:
         prev = st.session_state.get("similar_results") or []
         if prev:
-            render_row("Similar movies (last run)", prev, "sim_prev")
+            render_row("Similar movies (last run)", prev, "sim_prev", default_limit=12)
 
 with tab_about:
     st.subheader("About")

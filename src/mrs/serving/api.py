@@ -167,13 +167,6 @@ def model_info():
     return out
 
 
-@app.get("/v1/movies/{movie_id}")
-def get_movie(movie_id: int):
-    rec = _movie_record(movie_id)
-    if rec["title"] is None and rec["genres"] is None:
-        raise HTTPException(status_code=404, detail="Movie not found.")
-    return rec
-
 @app.get("/v1/movies/search")
 def search_movies(
     q: str = Query(..., min_length=1),
@@ -194,6 +187,14 @@ def search_movies(
                 break
 
     return {"q": q, "limit": limit, "results": results}
+
+
+@app.get("/v1/movies/{movie_id}")
+def get_movie(movie_id: int):
+    rec = _movie_record(movie_id)
+    if rec["title"] is None and rec["genres"] is None:
+        raise HTTPException(status_code=404, detail="Movie not found.")
+    return rec
 
 @app.get("/v1/recommendations")
 def recommendations(
