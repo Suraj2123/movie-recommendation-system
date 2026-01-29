@@ -25,6 +25,22 @@ def _sleep_backoff(attempt: int) -> None:
     time.sleep(0.8 + attempt * 0.4)
 
 
+def _sanitize_error(status: int, reason: str, body: str) -> str:
+    """User-friendly error message; avoid dumping HTML."""
+    if status == 502:
+        return "Backend temporarily unavailable (often due to cold start). Wait a minute and try again."
+    if status == 503:
+        return "Service temporarily unavailable. Please try again shortly."
+    if status >= 500:
+        return "Server error. Please try again in a moment."
+    if "<!DOCTYPE" in body or "<html" in body.lower():
+        return "Invalid response from API." if status == 0 else f"{status} {reason}"
+    snippet = body[:300].strip()
+    if snippet and not snippet.lstrip().startswith("<"):
+        return f"{status} {reason}: {snippet}" if status else "Invalid response from API."
+    return "Invalid response from API." if status == 0 else f"{status} {reason}"
+
+
 def call_api(
     path: str,
     params: dict[str, Any] | None = None,
@@ -41,13 +57,13 @@ def call_api(
                 continue
             if r.status_code >= 400:
                 body = (r.text or "").strip()
-                return None, f"{r.status_code} {r.reason}: {body[:500]}"
+                return None, _sanitize_error(r.status_code, r.reason or "", body)
             try:
                 return r.json(), None
             except Exception:
                 ct = r.headers.get("content-type", "(missing)")
                 body = (r.text or "").strip()
-                return None, f"Expected JSON; got {ct}. {body[:500]}"
+                return None, _sanitize_error(0, "Invalid response", body)
         except Exception as e:
             last_err = str(e)
             if attempt < retries:
@@ -109,12 +125,18 @@ class Movie:
     score: float | None = None
 
 
+_PLACEHOLDER_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513" viewBox="0 0 342 513">
+  <rect width="342" height="513" fill="#1a1a2e"/>
+  <text x="171" y="256" text-anchor="middle" fill="#666" font-size="20" font-family="system-ui,sans-serif">No poster</text>
+</svg>'''
+
+
 def poster_or_placeholder(m: Movie) -> str:
     if m.title and TMDB_API_KEY:
         u = tmdb_search_poster(m.title, parse_year(m.title))
         if u:
             return u
-    return "https://placehold.co/342x513/1a1a2e/eee?text=🎬"
+    return _PLACEHOLDER_SVG
 
 
 def to_movies(items: Any, key: str) -> list[Movie]:
@@ -193,6 +215,8 @@ st.markdown(
     .hero h1 { font-size: 2.4rem; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
     .hero p { color: #888; font-size: 1.05rem; margin-top: 0.25rem; }
     .local-banner { background: #1e2a1e; color: #8bc34a; padding: 10px 16px; border-radius: 10px; margin-bottom: 1rem; font-size: 0.9rem; }
+    button[kind="primary"], [data-testid="stButton"] button { white-space: nowrap; }
+    [data-testid="stImage"] img { object-fit: cover; min-height: 200px; background: #1a1a2e; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -292,17 +316,16 @@ def render_movie_card(m: Movie, key_prefix: str) -> None:
         st.caption(subtitle)
         if m.score is not None:
             st.caption(f"Score: {m.score:.3f}")
-        b1, b2, b3 = st.columns(3)
-        if b1.button("Details", key=f"{key_prefix}_d_{m.movie_id}", use_container_width=True):
+        if st.button("Details", key=f"{key_prefix}_d_{m.movie_id}", use_container_width=True):
             st.session_state["selected_movie_id"] = m.movie_id
             st.rerun()
         if not in_list(m.movie_id):
-            if b2.button("➕ List", key=f"{key_prefix}_a_{m.movie_id}", use_container_width=True):
+            if st.button("➕ My list", key=f"{key_prefix}_a_{m.movie_id}", use_container_width=True):
                 add_to_list(m)
                 st.rerun()
         else:
-            b2.button("✓ Saved", key=f"{key_prefix}_s_{m.movie_id}", use_container_width=True, disabled=True)
-        if b3.button("Similar", key=f"{key_prefix}_sim_{m.movie_id}", use_container_width=True):
+            st.button("✓ In list", key=f"{key_prefix}_s_{m.movie_id}", use_container_width=True, disabled=True)
+        if st.button("Similar", key=f"{key_prefix}_sim_{m.movie_id}", use_container_width=True):
             st.session_state["selected_movie_id"] = m.movie_id
             st.session_state["open_similar"] = True
             st.rerun()
@@ -313,9 +336,9 @@ def render_row(title: str, movies: list[Movie], key_prefix: str) -> None:
         st.caption("No movies to show.")
         return
     st.subheader(title)
-    cols = st.columns(6, gap="medium")
+    cols = st.columns(4, gap="medium")
     for i, m in enumerate(movies[:12]):
-        with cols[i % 6]:
+        with cols[i % 4]:
             render_movie_card(m, key_prefix=f"{key_prefix}_{i}")
 
 tab_home, tab_similar, tab_about = st.tabs(["Home", "Similar movies", "About"])
@@ -372,37 +395,38 @@ with tab_home:
             with c2:
                 st.markdown(f"## {m.title or f'Movie {m.movie_id}'}")
                 st.caption(m.genres or "—")
-                d1, d2, d3 = st.columns(3)
                 if not in_list(m.movie_id):
-                    if d1.button("Add to list", key="sel_add"):
+                    if st.button("Add to list", key="sel_add", use_container_width=True):
                         add_to_list(m)
                         st.rerun()
                 else:
-                    d1.button("In list", key="sel_in", disabled=True)
-                if d2.button("Find similar", key="sel_sim"):
+                    st.button("In list", key="sel_in", disabled=True, use_container_width=True)
+                if st.button("Find similar", key="sel_sim", use_container_width=True):
                     st.session_state["open_similar"] = True
                     st.rerun()
-                if d3.button("Clear", key="sel_clear"):
+                if st.button("Clear", key="sel_clear", use_container_width=True):
                     st.session_state["selected_movie_id"] = None
                     st.rerun()
 
 with tab_similar:
     st.subheader("Find similar movies")
-    st.caption("Pick a movie (by ID or from search) and get content-based recommendations.")
+    st.caption("Pick a movie (by ID or from search) and get content-based recommendations. "
+               "First request may take 30–60s while the model loads.")
 
     seed = st.number_input("Movie ID", min_value=1, value=int(selected_movie_id or 318), step=1, key="seed_id")
     k_sim = st.slider("How many similar?", 5, 30, 12, key="k_sim")
 
     if st.button("Find similar", type="primary", key="find_sim"):
-        with st.spinner("Fetching similar movies…"):
+        with st.spinner("Fetching similar movies… (can take up to a minute on first use)"):
             sim_data, sim_err = call_api(
                 "/v1/similar-items",
                 params={"movie_id": int(seed), "k": int(k_sim)},
-                timeout=90,
-                retries=6,
+                timeout=120,
+                retries=8,
             )
         if sim_err:
             st.error(sim_err)
+            st.caption("If the API just woke from sleep, wait ~60s and try again.")
             st.session_state["similar_results"] = []
         else:
             sims = to_movies(sim_data, "similar_items")
