@@ -14,7 +14,6 @@ from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
 from mrs.serving.movies_lookup import load_movies_lookup
 
-
 Strategy = Literal["popularity", "content"]
 
 POP_MODEL: PopularityRecommender | None = None
