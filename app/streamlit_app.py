@@ -9,6 +9,7 @@ from typing import Any
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 APP_TITLE = "Movie Picks"
 APP_TAGLINE = "Recommendations powered by popularity & content-based models"
@@ -279,7 +280,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Controls")
     user_id = st.number_input("User ID", min_value=1, value=1, step=1, key="user_id")
-    rec_k = st.slider("Recommendations count", 10, 100, 30, key="rec_k")
+    rec_k = st.slider("Recommendations count", 10, 50, 20, key="rec_k")
     strategy = st.selectbox("Strategy", ["popularity", "content"], index=0, key="strategy")
     st.caption("Popularity = top-rated; Content = TF‑IDF similarity.")
 
@@ -450,7 +451,22 @@ with tab_home:
 
     if selected_movie_id is not None:
         st.divider()
+        st.markdown('<div id="selected-movie-section"></div>', unsafe_allow_html=True)
         st.subheader("Selected movie")
+        
+        # Auto-scroll to details section
+        components.html(
+            """
+            <script>
+                window.parent.document.getElementById('selected-movie-section').scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            </script>
+            """,
+            height=0,
+        )
+        
         details, det_err = call_api(f"/v1/movies/{int(selected_movie_id)}", timeout=15, retries=2)
         if det_err:
             st.warning("Could not load details.")
@@ -526,7 +542,7 @@ with tab_similar:
                "First request may take 30–60s while the model loads.")
 
     seed = st.number_input("Movie ID", min_value=1, value=int(selected_movie_id or 318), step=1, key="seed_id")
-    k_sim = st.slider("How many similar?", 10, 100, 30, key="k_sim")
+    k_sim = st.slider("How many similar?", 10, 50, 20, key="k_sim")
 
     if st.button("Find similar", type="primary", key="find_sim"):
         with st.spinner("Fetching similar movies… (can take up to a minute on first use)"):
