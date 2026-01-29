@@ -1,4 +1,5 @@
-from __future__ import annotations
+try:
+    rom __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -298,4 +299,7 @@ def similar_items(
         out_items.append(out)
 
     return {"movie_id": movie_id, "k": k, "similar_items": out_items}
-
+except Exception:
+    st.error("App crashed:")
+    st.code(traceback.format_exc())
+    st.stop()
