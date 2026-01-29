@@ -123,6 +123,9 @@ class Movie:
     title: str | None
     genres: str | None
     score: float | None = None
+    avg_rating: float | None = None
+    rating_count: int | None = None
+    year: int | None = None
 
 
 _PLACEHOLDER_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513" viewBox="0 0 342 513">
@@ -154,6 +157,9 @@ def to_movies(items: Any, key: str) -> list[Movie]:
                 title=it.get("title"),
                 genres=it.get("genres"),
                 score=float(it["score"]) if it.get("score") is not None else None,
+                avg_rating=float(it["avg_rating"]) if it.get("avg_rating") is not None else None,
+                rating_count=safe_int(it.get("rating_count")) if it.get("rating_count") is not None else None,
+                year=safe_int(it.get("year")) if it.get("year") is not None else None,
             )
         )
     return out
@@ -312,16 +318,28 @@ if do_search and (q or "").strip():
 selected_movie_id = st.session_state.get("selected_movie_id")
 
 
-def render_movie_card(m: Movie, key_prefix: str) -> None:
+def render_movie_card(m: Movie, key_prefix: str, score_label: str | None = None) -> None:
     poster = poster_or_placeholder(m)
     title = m.title or f"Movie {m.movie_id}"
-    subtitle = m.genres or "—"
+    if m.genres and m.year:
+        subtitle = f"{m.genres} · {m.year}"
+    elif m.genres:
+        subtitle = m.genres
+    elif m.year:
+        subtitle = str(m.year)
+    else:
+        subtitle = "—"
     with st.container():
         st.image(poster, use_container_width=True)
         st.markdown(f"**{title}**")
         st.caption(subtitle)
-        if m.score is not None:
-            st.caption(f"Score: {m.score:.3f}")
+        if m.avg_rating is not None:
+            if m.rating_count:
+                st.caption(f"Avg rating: {m.avg_rating:.2f} ({m.rating_count:,} ratings)")
+            else:
+                st.caption(f"Avg rating: {m.avg_rating:.2f}")
+        elif m.score is not None:
+            st.caption(f"{score_label or 'Score'}: {m.score:.3f}")
         if st.button("Details", key=f"{key_prefix}_d_{m.movie_id}", use_container_width=True):
             st.session_state["selected_movie_id"] = m.movie_id
             st.rerun()
@@ -337,7 +355,13 @@ def render_movie_card(m: Movie, key_prefix: str) -> None:
             st.rerun()
 
 
-def render_row(title: str, movies: list[Movie], key_prefix: str, default_limit: int = 16) -> None:
+def render_row(
+    title: str,
+    movies: list[Movie],
+    key_prefix: str,
+    default_limit: int = 16,
+    score_label: str | None = None,
+) -> None:
     if not movies:
         st.caption("No movies to show.")
         return
@@ -347,7 +371,7 @@ def render_row(title: str, movies: list[Movie], key_prefix: str, default_limit: 
     cols = st.columns(4, gap="medium")
     for i, m in enumerate(movies[:limit]):
         with cols[i % 4]:
-            render_movie_card(m, key_prefix=f"{key_prefix}_{i}")
+            render_movie_card(m, key_prefix=f"{key_prefix}_{i}", score_label=score_label)
     if len(movies) > limit:
         if st.button("Show more", key=f"{key_prefix}_more"):
             st.session_state["row_limits"][key_prefix] = limit + default_limit
@@ -376,7 +400,7 @@ with tab_home:
         st.warning("Trending temporarily unavailable.")
         st.caption(rec_err)
     else:
-        render_row("Trending", trending, "trending", default_limit=min(24, int(rec_k)))
+        render_row("Trending", trending, "trending", default_limit=min(24, int(rec_k)), score_label="Score")
 
     with st.spinner("Loading for you…"):
         fy_data, fy_err = call_api(
@@ -390,10 +414,21 @@ with tab_home:
         st.warning("For you temporarily unavailable.")
         st.caption(fy_err)
     else:
-        render_row(f"For you ({strategy})", for_you, "foryou", default_limit=min(24, int(rec_k)))
+        render_row(
+            f"For you ({strategy})",
+            for_you,
+            "foryou",
+            default_limit=min(24, int(rec_k)),
+            score_label="Score",
+        )
 
     if search_results:
-        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search", default_limit=24)
+        render_row(
+            f'Search: "{st.session_state["last_search"]}"',
+            search_results,
+            "search",
+            default_limit=24,
+        )
 
     if selected_movie_id is not None:
         st.divider()
@@ -408,13 +443,30 @@ with tab_home:
                 title=details.get("title"),
                 genres=details.get("genres"),
                 score=None,
+                avg_rating=float(details["avg_rating"]) if details.get("avg_rating") is not None else None,
+                rating_count=safe_int(details.get("rating_count"))
+                if details.get("rating_count") is not None
+                else None,
+                year=safe_int(details.get("year")) if details.get("year") is not None else None,
             )
             c1, c2 = st.columns([1, 2])
             with c1:
                 st.image(poster_or_placeholder(m), use_container_width=True)
             with c2:
                 st.markdown(f"## {m.title or f'Movie {m.movie_id}'}")
-                st.caption(m.genres or "—")
+                if m.genres and m.year:
+                    st.caption(f"{m.genres} · {m.year}")
+                elif m.genres:
+                    st.caption(m.genres)
+                elif m.year:
+                    st.caption(str(m.year))
+                else:
+                    st.caption("—")
+                if m.avg_rating is not None:
+                    if m.rating_count:
+                        st.caption(f"Avg rating: {m.avg_rating:.2f} ({m.rating_count:,} ratings)")
+                    else:
+                        st.caption(f"Avg rating: {m.avg_rating:.2f}")
                 if not in_list(m.movie_id):
                     if st.button("Add to list", key="sel_add", use_container_width=True):
                         add_to_list(m)
@@ -451,11 +503,11 @@ with tab_similar:
         else:
             sims = to_movies(sim_data, "similar_items")
             st.session_state["similar_results"] = sims
-            render_row("Similar movies", sims, "sim", default_limit=24)
+            render_row("Similar movies", sims, "sim", default_limit=24, score_label="Similarity")
     else:
         prev = st.session_state.get("similar_results") or []
         if prev:
-            render_row("Similar movies (last run)", prev, "sim_prev", default_limit=24)
+            render_row("Similar movies (last run)", prev, "sim_prev", default_limit=24, score_label="Similarity")
 
 with tab_about:
     st.subheader("About")

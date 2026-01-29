@@ -59,6 +59,14 @@ def train(run_id: str) -> dict[str, Any]:
     dump(popularity, models_dir / "popularity.joblib")
     content.save(str(models_dir / "content_tfidf.joblib"))
 
+    # Movie-level stats for UI/details (avg rating + count)
+    movie_stats = (
+        data.ratings.groupby("movieId")["rating"]
+        .agg(avg_rating="mean", rating_count="count")
+        .reset_index()
+    )
+    movie_stats.to_csv(out_dir / "movie_stats.csv", index=False)
+
     metrics = {
         "run_id": run_id,
         "popularity": pop_eval.__dict__,
@@ -81,6 +89,7 @@ def train(run_id: str) -> dict[str, Any]:
             "popularity.joblib",
             "content_tfidf.joblib",
         ],
+        "extras": ["movie_stats.csv"],
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 

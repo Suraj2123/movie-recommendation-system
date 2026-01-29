@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -19,6 +21,7 @@ Strategy = Literal["popularity", "content"]
 POP_MODEL: PopularityRecommender | None = None
 CONTENT_MODEL: ContentTfidfModel | None = None
 MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
+MOVIE_STATS: dict[int, dict[str, float | int]] = {}
 MODELS_LOADED = False
 
 def _models_dir() -> Path:
@@ -43,20 +46,45 @@ def _clean_text(v: Any) -> str | None:
     s = str(v).strip()
     return s if s else None
 
-def _enrich(movie_id: int) -> dict[str, str | None]:
-    meta = MOVIES_LOOKUP.get(movie_id, {})
+
+def _parse_year(title: str | None) -> int | None:
+    if not title:
+        return None
+    m = re.search(r"\((\d{4})\)\s*$", title)
+    return int(m.group(1)) if m else None
+
+
+def _stats(movie_id: int) -> dict[str, float | int | None]:
+    stats = MOVIE_STATS.get(movie_id) or {}
     return {
-        "title": _clean_text(meta.get("title")),
-        "genres": _clean_text(meta.get("genres")),
+        "avg_rating": stats.get("avg_rating"),
+        "rating_count": stats.get("rating_count"),
     }
+
+def _enrich(movie_id: int) -> dict[str, Any]:
+    meta = MOVIES_LOOKUP.get(movie_id, {})
+    title = _clean_text(meta.get("title"))
+    genres = _clean_text(meta.get("genres"))
+    out: dict[str, Any] = {
+        "title": title,
+        "genres": genres,
+        "year": _parse_year(title),
+    }
+    out.update(_stats(movie_id))
+    return out
 
 def _movie_record(movie_id: int) -> dict[str, Any]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
-    return {
+    title = _clean_text(meta.get("title"))
+    genres = _clean_text(meta.get("genres"))
+    out: dict[str, Any] = {
         "movie_id": movie_id,
-        "title": _clean_text(meta.get("title")),
-        "genres": _clean_text(meta.get("genres")),
+        "title": title,
+        "genres": genres,
+        "year": _parse_year(title),
     }
+    out.update(_stats(movie_id))
+    return out
 
 def _ensure_loaded() -> None:
     if not MODELS_LOADED or POP_MODEL is None:
@@ -89,18 +117,48 @@ def _item_to_mid_score(item: Any) -> tuple[int, float | None]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global CONTENT_MODEL, MODELS_LOADED, MOVIES_LOOKUP, POP_MODEL
+    global CONTENT_MODEL, MODELS_LOADED, MOVIES_LOOKUP, POP_MODEL, MOVIE_STATS
 
     MODELS_LOADED = False
     POP_MODEL = None
     CONTENT_MODEL = None
     MOVIES_LOOKUP = {}
+    MOVIE_STATS = {}
 
     # Load movie metadata (optional)
     try:
         MOVIES_LOOKUP = load_movies_lookup(settings.data_dir)
     except Exception:
         MOVIES_LOOKUP = {}
+
+    # Load movie stats (avg rating + count) from artifacts
+    try:
+        stats_path = _run_dir() / "movie_stats.csv"
+        if stats_path.exists():
+            with stats_path.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    raw_id = (row.get("movieId") or "").strip()
+                    if not raw_id:
+                        continue
+                    try:
+                        movie_id = int(raw_id)
+                    except ValueError:
+                        continue
+                    try:
+                        avg = float(row.get("avg_rating") or 0.0)
+                    except ValueError:
+                        avg = 0.0
+                    try:
+                        cnt = int(float(row.get("rating_count") or 0))
+                    except ValueError:
+                        cnt = 0
+                    MOVIE_STATS[movie_id] = {
+                        "avg_rating": round(avg, 3),
+                        "rating_count": cnt,
+                    }
+    except Exception:
+        MOVIE_STATS = {}
 
     # Load popularity model from artifacts (required).
     # Content model is lazy-loaded on first /v1/similar-items call (free-tier safe).
@@ -180,9 +238,7 @@ def search_movies(
     for mid, meta in MOVIES_LOOKUP.items():
         title = (meta.get("title") or "")
         if query in title.casefold():
-            results.append(
-                {"movie_id": mid, "title": _clean_text(meta.get("title")), "genres": _clean_text(meta.get("genres")),}
-            )
+            results.append(_movie_record(mid))
             if len(results) >= limit:
                 break
 
@@ -203,6 +259,7 @@ def recommendations(
     strategy: Strategy = Query("popularity"),
 ):
     _ensure_loaded()
+    score_type = "bayesian_rating" if strategy == "popularity" else "content_centrality"
 
     try:
         if strategy == "popularity":
@@ -254,7 +311,13 @@ def recommendations(
             out["score"] = float(score)
         recs.append(out)
 
-    return {"user_id": user_id, "k": k, "strategy": strategy, "recommendations": recs}
+    return {
+        "user_id": user_id,
+        "k": k,
+        "strategy": strategy,
+        "score_type": score_type,
+        "recommendations": recs,
+    }
 
 @app.get("/v1/similar-items")
 def similar_items(
@@ -320,4 +383,9 @@ def similar_items(
             out_dict["score"] = float(score)
         out_items.append(out_dict)
 
-    return {"movie_id": movie_id, "k": k, "similar_items": out_items}
+    return {
+        "movie_id": movie_id,
+        "k": k,
+        "score_type": "cosine_similarity",
+        "similar_items": out_items,
+    }
