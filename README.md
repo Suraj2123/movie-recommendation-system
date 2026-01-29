@@ -1,15 +1,27 @@
-# Movie Recommendation System
+# 🎬 Movie Recommendation System
 
-Production-grade movie recommender with **offline training**, a **FastAPI service**, and a **polished Streamlit UI**. The system trains on MovieLens, serves popularity and content-based recommendations, and surfaces rich movie metadata using TMDB and IMDb IDs.
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Production-grade movie recommender with **offline training**, a **FastAPI service**, and a **polished Streamlit UI**. Trained on MovieLens with popularity and content-based strategies, enriched with TMDB/IMDb metadata.
 
 ---
 
-## Highlights
+## 🚀 Live Demo
 
-- **End-to-end ML system**: data download, preprocessing, offline evaluation, artifact versioning, and online serving.
-- **Two strategies**: popularity baseline (Bayesian-smoothed ratings) + content-based TF-IDF.
-- **Real movie details**: title, genres, year, average rating, rating count, IMDb link, TMDB overview.
-- **Deployable**: Render Blueprint (`render.yaml`) with API + UI services.
+**🌐 Web App:** https://movie-recommendation-ui-production-8767.up.railway.app _(first load may take 30s on free tier)_  
+**📡 API Docs:** https://movie-recommendation-api-production-8d3c.up.railway.app/docs  
+**🔍 API Health:** https://movie-recommendation-api-production-8d3c.up.railway.app/health
+
+---
+
+## ✨ Highlights
+
+- **End-to-end ML pipeline** — data ingestion, preprocessing, training, evaluation, artifact versioning, and serving
+- **Two recommendation strategies** — popularity baseline (Bayesian-smoothed) + content-based TF-IDF with cosine similarity
+- **Rich metadata** — average ratings, vote counts, release years, IMDb links, TMDB posters and overviews
+- **Production-ready** — separate API/UI services, CI/CD with GitHub Actions, deployed on Railway
 
 ---
 
@@ -70,24 +82,37 @@ API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py
 
 ---
 
-## Deployment (Render)
+## 🚢 Deployment
 
-1. Connect repo to [Render](https://render.com) and create a **Blueprint** from `render.yaml`.
-2. Deploy both services:
-   - **movie-recommendation-api**: trains on build, serves API.
-   - **movie-recommendation-ui**: Streamlit UI.
-3. Set `API_BASE_URL` for the UI service to your API URL (e.g. `https://movie-recommendation-api.onrender.com`).
-4. Optional: add `TMDB_API_KEY` for posters and richer details.
+**Currently deployed on Railway** ([railway.app](https://railway.app))
+
+### Railway (recommended)
+1. Create Railway account and connect GitHub repo
+2. Deploy API service:
+   - Build command: `pip install -U pip && pip install -e ".[dev]" && python -m mrs.pipelines.train --run-id prod`
+   - Start command: `uvicorn mrs.serving.api:app --host 0.0.0.0 --port $PORT`
+   - Set env: `RUN_ID=prod`, `MRS_RUN_ID=prod`
+3. Deploy UI service:
+   - Build command: `pip install -U pip && pip install -r app/requirements.txt`
+   - Start command: `streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true`
+   - Set env: `API_BASE_URL=<your-api-url>`, `TMDB_API_KEY=<optional>`
+
+### Render
+Alternatively, use the included Blueprint:
+```bash
+# render.yaml included for one-click deploy
+```
 
 ---
 
-## Tech stack
+## 🛠️ Tech stack
 
-- **Python 3.11**
-- **FastAPI** + **Uvicorn**
-- **Pandas / NumPy / SciKit-Learn**
-- **Streamlit**
-- **Render** (deploy)
+- **Python 3.11** — Core language
+- **FastAPI + Uvicorn** — High-performance API framework
+- **Pandas / NumPy / SciKit-Learn** — Data processing and ML
+- **Streamlit** — Interactive web UI
+- **Railway** — Cloud deployment
+- **GitHub Actions** — CI/CD pipeline
 
 ---
 
@@ -108,14 +133,22 @@ API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py
 
 ---
 
-## Notes for reviewers
+## 📊 Architecture highlights
 
-- **Scalable design**: models are serialized artifacts, making deploys reproducible.
-- **Clear separation**: data, modeling, evaluation, and serving modules are isolated.
-- **Production parity**: API + UI deployed separately, API can scale independently.
+- **Reproducible builds** — Models are serialized artifacts with versioned training runs
+- **Clean architecture** — Data, models, evaluation, and serving are fully isolated
+- **Microservices** — API and UI deploy separately; API can scale independently
+- **Graceful degradation** — UI retries on cold starts, falls back to placeholders when metadata unavailable
+- **CI/CD** — Automated linting and testing via GitHub Actions
 
 ---
 
-## License
+## 📸 Screenshots
 
-See project license file.
+_Coming soon_
+
+---
+
+## 📝 License
+
+See [LICENSE](LICENSE) file.
