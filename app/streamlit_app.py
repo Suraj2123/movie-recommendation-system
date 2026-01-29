@@ -117,6 +117,21 @@ def tmdb_search_poster(title: str, year: int | None, api_key: str) -> str | None
         return None
 
 
+@st.cache_data(ttl=6 * 3600)
+def tmdb_movie_details(tmdb_id: str, api_key: str) -> dict[str, Any] | None:
+    if not tmdb_id or not api_key:
+        return None
+    url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+    params = {"api_key": api_key}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception:
+        return None
+
+
 @dataclass
 class Movie:
     movie_id: int
@@ -126,6 +141,8 @@ class Movie:
     avg_rating: float | None = None
     rating_count: int | None = None
     year: int | None = None
+    tmdb_id: str | None = None
+    imdb_id: str | None = None
 
 
 _PLACEHOLDER_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513" viewBox="0 0 342 513">
@@ -160,6 +177,8 @@ def to_movies(items: Any, key: str) -> list[Movie]:
                 avg_rating=float(it["avg_rating"]) if it.get("avg_rating") is not None else None,
                 rating_count=safe_int(it.get("rating_count")) if it.get("rating_count") is not None else None,
                 year=safe_int(it.get("year")) if it.get("year") is not None else None,
+                tmdb_id=(str(it.get("tmdb_id")) if it.get("tmdb_id") not in {None, ""} else None),
+                imdb_id=(str(it.get("imdb_id")) if it.get("imdb_id") not in {None, ""} else None),
             )
         )
     return out
@@ -448,6 +467,8 @@ with tab_home:
                 if details.get("rating_count") is not None
                 else None,
                 year=safe_int(details.get("year")) if details.get("year") is not None else None,
+                tmdb_id=str(details.get("tmdb_id")) if details.get("tmdb_id") not in {None, ""} else None,
+                imdb_id=str(details.get("imdb_id")) if details.get("imdb_id") not in {None, ""} else None,
             )
             c1, c2 = st.columns([1, 2])
             with c1:
@@ -467,6 +488,26 @@ with tab_home:
                         st.caption(f"Avg rating: {m.avg_rating:.2f} ({m.rating_count:,} ratings)")
                     else:
                         st.caption(f"Avg rating: {m.avg_rating:.2f}")
+                if TMDB_API_KEY and m.tmdb_id:
+                    tmdb = tmdb_movie_details(m.tmdb_id, TMDB_API_KEY)
+                    if tmdb:
+                        overview = (tmdb.get("overview") or "").strip()
+                        runtime = tmdb.get("runtime")
+                        release_date = tmdb.get("release_date")
+                        vote_avg = tmdb.get("vote_average")
+                        if overview:
+                            st.caption(overview)
+                        meta = []
+                        if runtime:
+                            meta.append(f"{runtime} min")
+                        if release_date:
+                            meta.append(release_date)
+                        if vote_avg:
+                            meta.append(f"TMDB {vote_avg:.1f}/10")
+                        if meta:
+                            st.caption(" · ".join(meta))
+                if m.imdb_id:
+                    st.caption(f"IMDb: https://www.imdb.com/title/tt{m.imdb_id}")
                 if not in_list(m.movie_id):
                     if st.button("Add to list", key="sel_add", use_container_width=True):
                         add_to_list(m)

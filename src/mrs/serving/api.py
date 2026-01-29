@@ -14,13 +14,14 @@ from joblib import load
 from mrs.config.settings import Settings, settings
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
-from mrs.serving.movies_lookup import load_movies_lookup
+from mrs.serving.movies_lookup import load_links_lookup, load_movies_lookup
 
 Strategy = Literal["popularity", "content"]
 
 POP_MODEL: PopularityRecommender | None = None
 CONTENT_MODEL: ContentTfidfModel | None = None
 MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
+MOVIE_LINKS: dict[int, dict[str, str]] = {}
 MOVIE_STATS: dict[int, dict[str, float | int]] = {}
 MODELS_LOADED = False
 
@@ -61,6 +62,13 @@ def _stats(movie_id: int) -> dict[str, float | int | None]:
         "rating_count": stats.get("rating_count"),
     }
 
+
+def _links(movie_id: int) -> dict[str, str | None]:
+    links = MOVIE_LINKS.get(movie_id) or {}
+    imdb_id = links.get("imdb_id") or None
+    tmdb_id = links.get("tmdb_id") or None
+    return {"imdb_id": imdb_id, "tmdb_id": tmdb_id}
+
 def _enrich(movie_id: int) -> dict[str, Any]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
     title = _clean_text(meta.get("title"))
@@ -71,6 +79,7 @@ def _enrich(movie_id: int) -> dict[str, Any]:
         "year": _parse_year(title),
     }
     out.update(_stats(movie_id))
+    out.update(_links(movie_id))
     return out
 
 def _movie_record(movie_id: int) -> dict[str, Any]:
@@ -84,6 +93,7 @@ def _movie_record(movie_id: int) -> dict[str, Any]:
         "year": _parse_year(title),
     }
     out.update(_stats(movie_id))
+    out.update(_links(movie_id))
     return out
 
 def _ensure_loaded() -> None:
@@ -117,12 +127,13 @@ def _item_to_mid_score(item: Any) -> tuple[int, float | None]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global CONTENT_MODEL, MODELS_LOADED, MOVIES_LOOKUP, POP_MODEL, MOVIE_STATS
+    global CONTENT_MODEL, MODELS_LOADED, MOVIES_LOOKUP, POP_MODEL, MOVIE_STATS, MOVIE_LINKS
 
     MODELS_LOADED = False
     POP_MODEL = None
     CONTENT_MODEL = None
     MOVIES_LOOKUP = {}
+    MOVIE_LINKS = {}
     MOVIE_STATS = {}
 
     # Load movie metadata (optional)
@@ -130,6 +141,11 @@ async def lifespan(app: FastAPI):
         MOVIES_LOOKUP = load_movies_lookup(settings.data_dir)
     except Exception:
         MOVIES_LOOKUP = {}
+
+    try:
+        MOVIE_LINKS = load_links_lookup(settings.data_dir)
+    except Exception:
+        MOVIE_LINKS = {}
 
     # Load movie stats (avg rating + count) from artifacts
     try:
