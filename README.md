@@ -1,22 +1,18 @@
-# 🎬 Movie Recommendation System
-
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+# Movie Recommendation System
 
 Production-grade movie recommender with **offline training**, a **FastAPI service**, and a **polished Streamlit UI**. Trained on MovieLens with popularity and content-based strategies, enriched with TMDB/IMDb metadata.
 
 ---
 
-## 🚀 Live Demo
+## Live Demo
 
-**🌐 Web App:** https://movie-recommendation-ui-production-8767.up.railway.app _(first load may take 30s on free tier)_  
-**📡 API Docs:** https://movie-recommendation-api-production-8d3c.up.railway.app/docs  
-**🔍 API Health:** https://movie-recommendation-api-production-8d3c.up.railway.app/health
+** Web App:** https://movie-recommendation-ui-production-8767.up.railway.app _(first load may take 30s on free tier)_  
+** API Docs:** https://movie-recommendation-api-production-8d3c.up.railway.app/docs  
+** API Health:** https://movie-recommendation-api-production-8d3c.up.railway.app/health
 
 ---
 
-## ✨ Highlights
+## Highlights
 
 - **End-to-end ML pipeline** — data ingestion, preprocessing, training, evaluation, artifact versioning, and serving
 - **Two recommendation strategies** — popularity baseline (Bayesian-smoothed) + content-based TF-IDF with cosine similarity
@@ -82,7 +78,7 @@ API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py
 
 ---
 
-## 🚢 Deployment
+## Deployment
 
 **Currently deployed on Railway** ([railway.app](https://railway.app))
 
@@ -105,7 +101,7 @@ Alternatively, use the included Blueprint:
 
 ---
 
-## 🛠️ Tech stack
+## Tech stack
 
 - **Python 3.11** — Core language
 - **FastAPI + Uvicorn** — High-performance API framework
@@ -133,7 +129,7 @@ Alternatively, use the included Blueprint:
 
 ---
 
-## 📊 Architecture highlights
+## Architecture highlights
 
 - **Reproducible builds** — Models are serialized artifacts with versioned training runs
 - **Clean architecture** — Data, models, evaluation, and serving are fully isolated
@@ -142,13 +138,3 @@ Alternatively, use the included Blueprint:
 - **CI/CD** — Automated linting and testing via GitHub Actions
 
 ---
-
-## 📸 Screenshots
-
-_Coming soon_
-
----
-
-## 📝 License
-
-See [LICENSE](LICENSE) file.
