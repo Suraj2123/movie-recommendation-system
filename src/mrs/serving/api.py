@@ -162,7 +162,6 @@ def similar_items(
     if CONTENT_MODEL is None:
         raise HTTPException(status_code=400, detail="Content model is not available.")
 
-    # Try common method names safely
     try:
         if hasattr(CONTENT_MODEL, "similar_items"):
             raw = CONTENT_MODEL.similar_items(movie_id=movie_id, k=k)
@@ -185,8 +184,15 @@ def similar_items(
             detail=f"similar-items failed: {type(e).__name__}: {e}",
         ) from e
 
+    # Accept multiple possible response shapes
+    items = (
+        _normalize_list(raw, "similar_items")
+        or _normalize_list(raw, "recommendations")
+        or _normalize_list(raw, "items")
+        or _normalize_list(raw, "results")
+        or (raw if isinstance(raw, list) else [])
+    )
 
-    items = _normalize_list(raw, "similar_items")
     out_items: list[dict[str, Any]] = []
 
     for item in items:
