@@ -62,7 +62,6 @@ async def lifespan(app: FastAPI):
     try:
         models_dir = _models_dir()
         pop_path = models_dir / "popularity.joblib"
-        content_path = models_dir / "content_tfidf.joblib"
 
         if not pop_path.exists():
             MODELS_LOADED = False
