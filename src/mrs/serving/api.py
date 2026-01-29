@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
         MOVIES_LOOKUP = {}
 
     # Load models from artifacts
+    # Load models from artifacts (popularity first; content optional)
     try:
         models_dir = _models_dir()
         pop_path = models_dir / "popularity.joblib"
@@ -68,16 +69,22 @@ async def lifespan(app: FastAPI):
             yield
             return
 
+        # Popularity model = required
         POP_MODEL = load(pop_path)
+        MODELS_LOADED = True
 
+        # Content model = optional (do NOT crash API if it fails)
         if content_path.exists():
-            CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
+            try:
+                CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
+            except Exception:
+                CONTENT_MODEL = None
         else:
             CONTENT_MODEL = None
 
-        MODELS_LOADED = True
     except Exception:
         MODELS_LOADED = False
+
 
     yield
 
