@@ -1,29 +1,15 @@
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+from dataclasses import dataclass
+from pathlib import Path
 
 
-class Settings(BaseSettings):
-    """
-    Central application settings.
-
-    Environment variables override defaults automatically.
-    """
-
-    # Render provides RUN_ID=prod
-    run_id: str = "local"
-
-    # Where trained artifacts are stored
-    artifacts_dir: str = "artifacts"
-
-    # Where datasets are cached/downloaded during training
-    data_dir: str = "data"
-
-    model_config = SettingsConfigDict(
-        env_prefix="",
-        case_sensitive=False,
-        extra="ignore",
-    )
+@dataclass(frozen=True)
+class Settings:
+    run_id: str = os.getenv("RUN_ID", "prod")
+    artifacts_dir: Path = Path(os.getenv("ARTIFACTS_DIR", "artifacts"))
+    tmdb_api_key: str | None = os.getenv("TMDB_API_KEY") or None
 
 
 settings = Settings()
