@@ -1,5 +1,4 @@
-try:
-    rom __future__ import annotations
+from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,9 +20,9 @@ CONTENT_MODEL: ContentTfidfModel | None = None
 MOVIES_LOOKUP: dict[int, dict[str, str]] = {}
 MODELS_LOADED = False
 
-
 def _models_dir() -> Path:
     return Path(settings.artifacts_dir) / settings.run_id / "models"
+
 def _clean_text(v: Any) -> str | None:
     if v is None:
         return None
@@ -39,14 +38,12 @@ def _clean_text(v: Any) -> str | None:
     s = str(v).strip()
     return s if s else None
 
-
 def _enrich(movie_id: int) -> dict[str, str | None]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
     return {
         "title": _clean_text(meta.get("title")),
         "genres": _clean_text(meta.get("genres")),
     }
-
 
 def _movie_record(movie_id: int) -> dict[str, Any]:
     meta = MOVIES_LOOKUP.get(movie_id, {})
@@ -56,11 +53,9 @@ def _movie_record(movie_id: int) -> dict[str, Any]:
         "genres": _clean_text(meta.get("genres")),
     }
 
-
 def _ensure_loaded() -> None:
     if not MODELS_LOADED or POP_MODEL is None:
         raise HTTPException(status_code=503, detail="Models not loaded. Train first.")
-
 
 def _normalize_list(raw: Any, list_key: str) -> list[Any]:
     if isinstance(raw, dict) and list_key in raw and isinstance(raw[list_key], list):
@@ -68,7 +63,6 @@ def _normalize_list(raw: Any, list_key: str) -> list[Any]:
     if isinstance(raw, list):
         return raw
     return []
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -105,7 +99,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-
 app = FastAPI(
     title="Movie Recommendation System",
     version="1.0.0",
@@ -125,7 +118,6 @@ def root():
         "example_recs": "/v1/recommendations?user_id=1&k=10&strategy=popularity",
     }
 
-
 @app.get("/health")
 def health():
     return {
@@ -134,14 +126,12 @@ def health():
         "models_loaded": bool(MODELS_LOADED and POP_MODEL is not None),
     }
 
-
 @app.get("/v1/movies/{movie_id}")
 def get_movie(movie_id: int):
     rec = _movie_record(movie_id)
     if rec["title"] is None and rec["genres"] is None:
         raise HTTPException(status_code=404, detail="Movie not found.")
     return rec
-
 
 @app.get("/v1/movies/search")
 def search_movies(
@@ -163,7 +153,6 @@ def search_movies(
                 break
 
     return {"q": q, "limit": limit, "results": results}
-
 
 @app.get("/v1/recommendations")
 def recommendations(
@@ -228,7 +217,6 @@ def recommendations(
         recs.append(out)
 
     return {"user_id": user_id, "k": k, "strategy": strategy, "recommendations": recs}
-
 
 @app.get("/v1/similar-items")
 def similar_items(
@@ -299,7 +287,3 @@ def similar_items(
         out_items.append(out)
 
     return {"movie_id": movie_id, "k": k, "similar_items": out_items}
-except Exception:
-    st.error("App crashed:")
-    st.code(traceback.format_exc())
-    st.stop()
