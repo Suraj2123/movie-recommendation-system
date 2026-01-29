@@ -9,10 +9,11 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Query
 from joblib import load
 
-from mrs.config.settings import settings, Settings
+from mrs.config.settings import Settings, settings
 from mrs.models.content_tfidf import ContentTfidfModel
 from mrs.models.popularity import PopularityRecommender
 from mrs.serving.movies_lookup import load_movies_lookup
+
 
 Strategy = Literal["popularity", "content"]
 
