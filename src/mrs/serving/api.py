@@ -74,13 +74,8 @@ async def lifespan(app: FastAPI):
         MODELS_LOADED = True
 
         # Content model = optional (do NOT crash API if it fails)
-        if content_path.exists():
-            try:
-                CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
-            except Exception:
-                CONTENT_MODEL = None
-        else:
-            CONTENT_MODEL = None
+        CONTENT_MODEL = None
+
 
     except Exception:
         MODELS_LOADED = False
@@ -166,8 +161,23 @@ def similar_items(
     k: int = Query(10, ge=1, le=50),
 ):
     _ensure_loaded()
+
+    # Lazy-load the content model only when needed (free-tier safe)
+    global CONTENT_MODEL
     if CONTENT_MODEL is None:
-        raise HTTPException(status_code=400, detail="Content model is not available.")
+        try:
+            models_dir = _models_dir()
+            content_path = models_dir / "content_tfidf.joblib"
+            if not content_path.exists():
+                raise HTTPException(status_code=400, detail="Content model is not available.")
+            CONTENT_MODEL = ContentTfidfModel.load(str(content_path))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Content model could not be loaded: {type(e).__name__}: {e}",
+            ) from e
 
     try:
         if hasattr(CONTENT_MODEL, "similar_items"):
@@ -191,7 +201,6 @@ def similar_items(
             detail=f"similar-items failed: {type(e).__name__}: {e}",
         ) from e
 
-    # Accept multiple possible response shapes
     items = (
         _normalize_list(raw, "similar_items")
         or _normalize_list(raw, "recommendations")
