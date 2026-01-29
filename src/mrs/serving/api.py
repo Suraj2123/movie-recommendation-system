@@ -154,30 +154,50 @@ def recommendations(
 ):
     _ensure_loaded()
 
-    if strategy == "popularity":
-        raw = (
-            POP_MODEL.recommend(user_id=user_id, k=k)
-            if hasattr(POP_MODEL, "recommend")
-            else POP_MODEL.top_k(k)  # type: ignore[attr-defined]
-        )
-    else:
-        if CONTENT_MODEL is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Content model is not loaded. Use /v1/similar-items first (lazy-load).",
-            )
-        raw = (
-            CONTENT_MODEL.recommend_for_user(user_id=user_id, k=k)
-            if hasattr(CONTENT_MODEL, "recommend_for_user")
-            else CONTENT_MODEL.recommend(user_id=user_id, k=k)  # type: ignore[attr-defined]
-        )
+    try:
+        if strategy == "popularity":
+            # Popularity models vary: some ignore user_id and only support top_k(k)
+            if hasattr(POP_MODEL, "recommend"):
+                try:
+                    raw = POP_MODEL.recommend(user_id=user_id, k=k)  # type: ignore[union-attr]
+                except TypeError:
+                    # Signature mismatch: fallback to calling without user_id
+                    raw = POP_MODEL.recommend(k=k)  # type: ignore[union-attr,call-arg]
+            else:
+                raw = POP_MODEL.top_k(k)  # type: ignore[union-attr,attr-defined]
+
+        else:
+            # Content strategy requires content model
+            if CONTENT_MODEL is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content model is not loaded yet. Use Similar Explorer first to lazy-load it.",
+                )
+
+            if hasattr(CONTENT_MODEL, "recommend_for_user"):
+                raw = CONTENT_MODEL.recommend_for_user(user_id=user_id, k=k)
+            elif hasattr(CONTENT_MODEL, "recommend"):
+                try:
+                    raw = CONTENT_MODEL.recommend(user_id=user_id, k=k)  # type: ignore[call-arg]
+                except TypeError:
+                    raw = CONTENT_MODEL.recommend(user_id, k)  # type: ignore[misc]
+            else:
+                raise HTTPException(status_code=500, detail="Content model has no recommend method.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"recommendations failed: {type(e).__name__}: {e}",
+        ) from e
 
     items = _normalize_list(raw, "recommendations")
     recs: list[dict[str, Any]] = []
 
     for item in items:
         if isinstance(item, dict):
-            movie_id = int(item.get("movie_id") or item.get("movieId"))
+            movie_id = int(item.get("movie_id") or item.get("movieId") or item.get("id"))
             score = item.get("score")
         else:
             movie_id = int(item[0])
