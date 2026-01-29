@@ -255,7 +255,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Controls")
     user_id = st.number_input("User ID", min_value=1, value=1, step=1, key="user_id")
-    rec_k = st.slider("Recommendations count", 5, 50, 20, key="rec_k")
+    rec_k = st.slider("Recommendations count", 10, 100, 30, key="rec_k")
     strategy = st.selectbox("Strategy", ["popularity", "content"], index=0, key="strategy")
     st.caption("Popularity = top-rated; Content = TF‑IDF similarity.")
 
@@ -337,7 +337,7 @@ def render_movie_card(m: Movie, key_prefix: str) -> None:
             st.rerun()
 
 
-def render_row(title: str, movies: list[Movie], key_prefix: str, default_limit: int = 12) -> None:
+def render_row(title: str, movies: list[Movie], key_prefix: str, default_limit: int = 16) -> None:
     if not movies:
         st.caption("No movies to show.")
         return
@@ -362,7 +362,7 @@ tab_home, tab_similar, tab_about = st.tabs(["Home", "Similar movies", "About"])
 with tab_home:
     my_list_main = list(st.session_state["my_list"].values())
     if my_list_main:
-        render_row("My list", my_list_main, "mylist", default_limit=8)
+        render_row("My list", my_list_main, "mylist", default_limit=12)
 
     with st.spinner("Loading trending…"):
         rec_data, rec_err = call_api(
@@ -376,7 +376,7 @@ with tab_home:
         st.warning("Trending temporarily unavailable.")
         st.caption(rec_err)
     else:
-        render_row("Trending", trending, "trending", default_limit=min(12, int(rec_k)))
+        render_row("Trending", trending, "trending", default_limit=min(24, int(rec_k)))
 
     with st.spinner("Loading for you…"):
         fy_data, fy_err = call_api(
@@ -390,10 +390,10 @@ with tab_home:
         st.warning("For you temporarily unavailable.")
         st.caption(fy_err)
     else:
-        render_row(f"For you ({strategy})", for_you, "foryou", default_limit=min(12, int(rec_k)))
+        render_row(f"For you ({strategy})", for_you, "foryou", default_limit=min(24, int(rec_k)))
 
     if search_results:
-        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search", default_limit=12)
+        render_row(f'Search: "{st.session_state["last_search"]}"', search_results, "search", default_limit=24)
 
     if selected_movie_id is not None:
         st.divider()
@@ -434,7 +434,7 @@ with tab_similar:
                "First request may take 30–60s while the model loads.")
 
     seed = st.number_input("Movie ID", min_value=1, value=int(selected_movie_id or 318), step=1, key="seed_id")
-    k_sim = st.slider("How many similar?", 5, 30, 12, key="k_sim")
+    k_sim = st.slider("How many similar?", 10, 100, 30, key="k_sim")
 
     if st.button("Find similar", type="primary", key="find_sim"):
         with st.spinner("Fetching similar movies… (can take up to a minute on first use)"):
@@ -451,11 +451,11 @@ with tab_similar:
         else:
             sims = to_movies(sim_data, "similar_items")
             st.session_state["similar_results"] = sims
-            render_row("Similar movies", sims, "sim", default_limit=12)
+            render_row("Similar movies", sims, "sim", default_limit=24)
     else:
         prev = st.session_state.get("similar_results") or []
         if prev:
-            render_row("Similar movies (last run)", prev, "sim_prev", default_limit=12)
+            render_row("Similar movies (last run)", prev, "sim_prev", default_limit=24)
 
 with tab_about:
     st.subheader("About")

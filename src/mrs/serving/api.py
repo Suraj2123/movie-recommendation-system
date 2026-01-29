@@ -170,7 +170,7 @@ def model_info():
 @app.get("/v1/movies/search")
 def search_movies(
     q: str = Query(..., min_length=1),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(50, ge=1, le=100),
 ):
     query = q.strip().casefold()
     if not query:
@@ -199,7 +199,7 @@ def get_movie(movie_id: int):
 @app.get("/v1/recommendations")
 def recommendations(
     user_id: int = Query(..., ge=1),
-    k: int = Query(10, ge=1, le=50),
+    k: int = Query(20, ge=1, le=100),
     strategy: Strategy = Query("popularity"),
 ):
     _ensure_loaded()
@@ -259,7 +259,7 @@ def recommendations(
 @app.get("/v1/similar-items")
 def similar_items(
     movie_id: int = Query(..., ge=1),
-    k: int = Query(10, ge=1, le=50),
+    k: int = Query(20, ge=1, le=100),
 ):
     _ensure_loaded()
 
